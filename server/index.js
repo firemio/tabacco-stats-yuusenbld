@@ -7,7 +7,10 @@ import {
   getHourlyStats, 
   getLatestStatus, 
   getRecordCount,
-  getStatusChanges
+  getStatusChanges,
+  getQueueStatsByDay,
+  getQueueHistory,
+  getActiveQueueEvent
 } from './database.js';
 // Playwrightスクレイパーの代わりにAPI監視を使用
 import { startMonitoring, setStatusChangeCallback } from './api-scraper.js';
@@ -103,6 +106,57 @@ app.get('/api/stats/count', (req, res) => {
     res.json({
       success: true,
       data: count
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * 行列統計取得（日別）
+ */
+app.get('/api/queue/daily', (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7;
+    const stats = getQueueStatsByDay(CAMERA_ID, days);
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * 行列イベント履歴取得
+ */
+app.get('/api/queue/history', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const history = getQueueHistory(CAMERA_ID, limit);
+    
+    res.json({
+      success: true,
+      data: history
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * 現在の行列状況取得
+ */
+app.get('/api/queue/current', (req, res) => {
+  try {
+    const activeQueue = getActiveQueueEvent(CAMERA_ID);
+    
+    res.json({
+      success: true,
+      data: activeQueue || null,
+      hasQueue: !!activeQueue
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

@@ -20,6 +20,8 @@ async function init() {
   await loadCurrentStatus();
   await loadRecordCount();
   await loadDailyStats();
+  await loadQueueStatus();
+  await loadQueueHistory();
   await loadStatusHistory();
   
   // 日付選択の初期値を今日に設定
@@ -49,6 +51,8 @@ function connectSSE() {
     await loadCurrentStatus();
     await loadRecordCount();
     await loadDailyStats();
+    await loadQueueStatus();
+    await loadQueueHistory();
     await loadStatusHistory();
     
     const today = new Date().toISOString().split('T')[0];
@@ -337,6 +341,111 @@ function renderStatusHistory(history) {
           ${isFirst ? '<span class="text-xs bg-blue-500 text-white px-2 py-1 rounded">最新</span>' : ''}
         </div>
         <span class="text-sm text-gray-600">${item.formatted_time}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+/**
+ * 現在の行列状況を取得
+ */
+async function loadQueueStatus() {
+  try {
+    const response = await fetch(`${API_BASE}/queue/current`);
+    const result = await response.json();
+    
+    const container = document.getElementById('current-queue');
+    
+    if (result.success && result.hasQueue && result.data) {
+      const queue = result.data;
+      const estimatedQueue = queue.estimated_queue || 0;
+      const turnoverCount = queue.turnover_count || 0;
+      
+      container.innerHTML = `
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-amber-700 font-bold text-xl">🚶 現在行列発生中</p>
+            <p class="text-gray-600 mt-2">
+              入れ替わり回数: <span class="font-bold text-lg">${turnoverCount}回</span>
+            </p>
+            <p class="text-gray-600">
+              推定待ち人数: <span class="font-bold text-2xl text-amber-600">${estimatedQueue}人</span>
+            </p>
+          </div>
+          <div class="bg-amber-200 rounded-full p-4">
+            <i class="fas fa-users text-amber-700 text-3xl"></i>
+          </div>
+        </div>
+      `;
+    } else {
+      container.innerHTML = `
+        <div class="flex items-center">
+          <i class="fas fa-check-circle text-green-500 mr-3 text-2xl"></i>
+          <p class="text-gray-700 font-semibold">現在行列は発生していません</p>
+        </div>
+      `;
+    }
+  } catch (error) {
+    console.error('行列状況取得エラー:', error);
+  }
+}
+
+/**
+ * 行列履歴を取得・表示
+ */
+async function loadQueueHistory() {
+  try {
+    const response = await fetch(`${API_BASE}/queue/history?limit=20`);
+    const result = await response.json();
+    
+    if (result.success) {
+      renderQueueHistory(result.data);
+    }
+  } catch (error) {
+    console.error('行列履歴取得エラー:', error);
+  }
+}
+
+/**
+ * 行列履歴を描画
+ */
+function renderQueueHistory(history) {
+  const container = document.getElementById('queue-history');
+  
+  if (!history || history.length === 0) {
+    container.innerHTML = '<p class="text-gray-500 text-center py-4">行列履歴データがありません</p>';
+    return;
+  }
+  
+  container.innerHTML = history.map((item, index) => {
+    const isRecent = index < 3;
+    const estimatedQueue = item.estimated_queue || 0;
+    const turnoverCount = item.turnover_count || 0;
+    const duration = item.duration_minutes || 0;
+    
+    return `
+      <div class="p-4 rounded-lg ${isRecent ? 'bg-amber-50 border-l-4 border-amber-500' : 'bg-gray-50'}">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center space-x-3">
+            <i class="fas fa-users text-amber-600"></i>
+            <span class="font-semibold text-gray-800">行列イベント #${history.length - index}</span>
+            ${isRecent ? '<span class="text-xs bg-amber-500 text-white px-2 py-1 rounded">最近</span>' : ''}
+          </div>
+          <span class="text-sm text-gray-500">${duration}分間</span>
+        </div>
+        <div class="grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <p class="text-gray-600">入れ替わり回数</p>
+            <p class="font-bold text-lg text-blue-600">${turnoverCount}回</p>
+          </div>
+          <div>
+            <p class="text-gray-600">推定待ち人数</p>
+            <p class="font-bold text-lg text-amber-600">${estimatedQueue}人</p>
+          </div>
+        </div>
+        <div class="mt-2 text-xs text-gray-500">
+          ${item.start_formatted} 〜 ${item.end_formatted}
+        </div>
       </div>
     `;
   }).join('');

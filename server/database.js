@@ -34,6 +34,22 @@ try {
   }
 }
 
+// 行列検知用のテーブル作成
+db.exec(`
+  CREATE TABLE IF NOT EXISTS queue_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    camera_id TEXT NOT NULL,
+    start_time INTEGER NOT NULL,
+    end_time INTEGER,
+    turnover_count INTEGER DEFAULT 1,
+    estimated_queue INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_queue_start ON queue_events(start_time);
+  CREATE INDEX IF NOT EXISTS idx_queue_camera ON queue_events(camera_id);
+`);
+
 /**
  * ステータスを記録
  */
@@ -130,6 +146,93 @@ export function getStatusChanges(cameraId, limit = 100) {
     SELECT status, count, timestamp, formatted_time
     FROM status_changes
     WHERE prev_status IS NULL OR status != prev_status
+    LIMIT ?
+  `);
+  
+  return stmt.all(cameraId, limit);
+}
+
+/**
+ * 行列イベントを開始
+ */
+export function startQueueEvent(cameraId, estimatedQueue = 0) {
+  const timestamp = Date.now();
+  const stmt = db.prepare(
+    'INSERT INTO queue_events (camera_id, start_time, estimated_queue, turnover_count) VALUES (?, ?, ?, 1)'
+  );
+  return stmt.run(cameraId, timestamp, estimatedQueue);
+}
+
+/**
+ * 行列イベントを更新（入れ替わり回数を増やす）
+ */
+export function updateQueueEvent(eventId, turnoverCount, estimatedQueue) {
+  const stmt = db.prepare(
+    'UPDATE queue_events SET turnover_count = ?, estimated_queue = ? WHERE id = ?'
+  );
+  return stmt.run(turnoverCount, estimatedQueue, eventId);
+}
+
+/**
+ * 行列イベントを終了
+ */
+export function endQueueEvent(eventId) {
+  const timestamp = Date.now();
+  const stmt = db.prepare(
+    'UPDATE queue_events SET end_time = ? WHERE id = ?'
+  );
+  return stmt.run(timestamp, eventId);
+}
+
+/**
+ * 現在進行中の行列イベントを取得
+ */
+export function getActiveQueueEvent(cameraId) {
+  const stmt = db.prepare(
+    'SELECT * FROM queue_events WHERE camera_id = ? AND end_time IS NULL ORDER BY start_time DESC LIMIT 1'
+  );
+  return stmt.get(cameraId);
+}
+
+/**
+ * 行列統計を取得（日別）
+ */
+export function getQueueStatsByDay(cameraId, days = 7) {
+  const startTime = Date.now() - (days * 24 * 60 * 60 * 1000);
+  
+  const stmt = db.prepare(`
+    SELECT 
+      date(start_time / 1000, 'unixepoch', 'localtime') as date,
+      COUNT(*) as queue_count,
+      AVG(turnover_count) as avg_turnover,
+      MAX(turnover_count) as max_turnover,
+      AVG(estimated_queue) as avg_estimated_queue,
+      MAX(estimated_queue) as max_estimated_queue
+    FROM queue_events
+    WHERE camera_id = ? AND start_time >= ? AND end_time IS NOT NULL
+    GROUP BY date
+    ORDER BY date DESC
+  `);
+  
+  return stmt.all(cameraId, startTime);
+}
+
+/**
+ * 行列イベント履歴を取得
+ */
+export function getQueueHistory(cameraId, limit = 50) {
+  const stmt = db.prepare(`
+    SELECT 
+      start_time,
+      end_time,
+      turnover_count,
+      estimated_queue,
+      datetime(start_time / 1000, 'unixepoch', 'localtime') as start_formatted,
+      datetime(end_time / 1000, 'unixepoch', 'localtime') as end_formatted,
+      CAST((end_time - start_time) / 60000 AS INTEGER) as duration_minutes
+    FROM queue_events
+    WHERE camera_id = ? AND end_time IS NOT NULL
+    ORDER BY start_time DESC
     LIMIT ?
   `);
   

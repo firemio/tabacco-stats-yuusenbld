@@ -1,12 +1,22 @@
-import { recordStatus } from './database.js';
+import { recordStatus, startQueueEvent, updateQueueEvent, endQueueEvent, getActiveQueueEvent } from './database.js';
 
 const API_URL = 'https://api.mebaru.blue/api/cameras/getLatestDataForGroup?id=77adc011-b0d6-4421-989e-625560ffd53a';
 const CAMERA_ID = 'abd6ab54-0eb9-4f52-a5a0-df6d8fd1ecb2';
 const POLL_INTERVAL = 10000; // 10秒ごと
+const CAPACITY = 6; // 定員
 
 let lastStatus = null;
+let lastCount = null;
 let broadcastCallback = null;
 let intervalId = null;
+
+// 行列検知用
+let queueDetectionState = {
+  isMonitoring: false,  // 大変混雑を監視中か
+  peakCount: 0,         // 最高人数
+  turnoverCount: 0,     // 入れ替わり回数
+  activeEventId: null   // 現在の行列イベントID
+};
 
 /**
  * ステータス変更時のコールバックを設定
@@ -110,7 +120,7 @@ function extractCounter(data) {
  * 人数からステータスを判定
  * 0: 空いています
  * 1～5: やや混雑
- * 6以上: 大変混雑
+ * 6以上: 大変混雑（7人、8人も含む）
  */
 function getStatusFromCount(count) {
   if (count === 0) {
@@ -121,6 +131,71 @@ function getStatusFromCount(count) {
     return '大変混雑';
   }
   return '不明';
+}
+
+/**
+ * 行列を検知・記録
+ * 6人以上（7人、8人も含む）で満員として扱う
+ */
+function detectQueue(count) {
+  const isFull = count >= CAPACITY; // 6人以上で満員（7人、8人も含む）
+  const hasDropped = lastCount !== null && lastCount < CAPACITY; // 定員未満に減少
+  
+  // 満員に達した（6人以上）
+  if (isFull) {
+    if (!queueDetectionState.isMonitoring) {
+      // 監視開始
+      queueDetectionState.isMonitoring = true;
+      queueDetectionState.peakCount = count;
+      queueDetectionState.turnoverCount = 0;
+      
+      // 行列イベント開始
+      const result = startQueueEvent(CAMERA_ID, 0);
+      queueDetectionState.activeEventId = result.lastInsertRowid;
+      
+      console.log(`🚶 行列検知開始 (${count}人で満員)`);
+    } else {
+      // 既に監視中 - 減った後に再び満員になった = 入れ替わり
+      if (hasDropped && isFull) {
+        queueDetectionState.turnoverCount++;
+        
+        // 実際の人数を基に推定（より正確）
+        const actualCapacity = Math.max(count, queueDetectionState.peakCount);
+        const estimatedQueue = queueDetectionState.turnoverCount * actualCapacity;
+        
+        // 行列イベント更新
+        if (queueDetectionState.activeEventId) {
+          updateQueueEvent(
+            queueDetectionState.activeEventId, 
+            queueDetectionState.turnoverCount, 
+            estimatedQueue
+          );
+        }
+        
+        console.log(`🔄 入れ替わり検知 #${queueDetectionState.turnoverCount} (${count}人) - 推定行列: ${estimatedQueue}人`);
+      }
+      
+      queueDetectionState.peakCount = Math.max(queueDetectionState.peakCount, count);
+    }
+  } else {
+    // 定員未満になった
+    if (queueDetectionState.isMonitoring && count < CAPACITY - 1) {
+      // 人数が大幅に減った = 行列解消
+      if (queueDetectionState.activeEventId) {
+        endQueueEvent(queueDetectionState.activeEventId);
+        
+        const actualCapacity = queueDetectionState.peakCount;
+        const estimatedQueue = queueDetectionState.turnoverCount * actualCapacity;
+        console.log(`✅ 行列終了 - 入れ替わり: ${queueDetectionState.turnoverCount}回, 最大${actualCapacity}人, 推定待ち: ${estimatedQueue}人`);
+      }
+      
+      // 監視リセット
+      queueDetectionState.isMonitoring = false;
+      queueDetectionState.peakCount = 0;
+      queueDetectionState.turnoverCount = 0;
+      queueDetectionState.activeEventId = null;
+    }
+  }
 }
 
 /**
@@ -136,7 +211,11 @@ export async function startMonitoring() {
   if (initialData && initialData.status !== '不明') {
     recordStatus(CAMERA_ID, initialData.status, initialData.count);
     lastStatus = initialData.status;
+    lastCount = initialData.count;
     console.log(`✅ 初回ステータスを記録: ${initialData.status} (${initialData.count}人)\n`);
+    
+    // 行列検知
+    detectQueue(initialData.count);
     
     // SSE通知
     if (broadcastCallback) {
@@ -148,17 +227,26 @@ export async function startMonitoring() {
   intervalId = setInterval(async () => {
     const currentData = await fetchStatusFromAPI();
     
-    if (currentData && currentData.status !== '不明' && currentData.status !== lastStatus) {
-      recordStatus(CAMERA_ID, currentData.status, currentData.count);
-      console.log(`🔄 ステータス変更を記録: ${lastStatus} → ${currentData.status} (${currentData.count}人)`);
-      lastStatus = currentData.status;
+    if (currentData && currentData.status !== '不明') {
+      // 行列検知（人数変化を常に監視）
+      detectQueue(currentData.count);
       
-      // SSE通知
-      if (broadcastCallback) {
-        broadcastCallback(currentData.status);
+      // ステータスが変わった場合のみ記録
+      if (currentData.status !== lastStatus) {
+        recordStatus(CAMERA_ID, currentData.status, currentData.count);
+        console.log(`🔄 ステータス変更を記録: ${lastStatus} → ${currentData.status} (${currentData.count}人)`);
+        lastStatus = currentData.status;
+        
+        // SSE通知
+        if (broadcastCallback) {
+          broadcastCallback(currentData.status);
+        }
+      } else {
+        console.log(`ℹ️ ステータス変更なし: ${currentData.status} (${currentData.count}人)`);
       }
-    } else if (currentData && currentData.status !== '不明') {
-      console.log(`ℹ️ ステータス変更なし: ${currentData.status} (${currentData.count}人)`);
+      
+      // 人数を記録（次回の比較用）
+      lastCount = currentData.count;
     }
   }, POLL_INTERVAL);
   
