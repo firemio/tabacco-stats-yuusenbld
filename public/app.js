@@ -13,6 +13,51 @@ const statusColors = {
   '不明': '#6b7280'
 };
 
+// 表示モード管理
+let isFullHDMode = true;
+
+/**
+ * 表示モードを切り替え
+ */
+function toggleDisplayMode() {
+  isFullHDMode = !isFullHDMode;
+  const mainContent = document.getElementById('main-content');
+  const appContainer = document.getElementById('app-container');
+  const body = document.body;
+  const modeText = document.getElementById('mode-text');
+  const toggleBtn = document.getElementById('toggle-mode');
+  const leftColumn = mainContent.children[0];
+  const rightColumn = mainContent.children[1];
+  
+  if (isFullHDMode) {
+    // Full HD固定表示モード
+    body.style.overflow = 'hidden';
+    appContainer.style.overflow = 'hidden';
+    appContainer.style.height = '100vh';
+    mainContent.className = 'flex-1 grid grid-cols-2 gap-4 overflow-hidden';
+    leftColumn.className = 'flex flex-col space-y-3 overflow-y-auto';
+    rightColumn.className = 'flex flex-col space-y-3';
+    modeText.textContent = 'レスポンシブ';
+    toggleBtn.querySelector('i').className = 'fas fa-desktop';
+  } else {
+    // レスポンシブモード（縦1カラム、全体スクロール）
+    body.style.overflow = 'auto';
+    appContainer.style.overflow = 'visible';
+    appContainer.style.height = 'auto';
+    mainContent.className = 'flex flex-col gap-4 pb-4';
+    leftColumn.className = 'flex flex-col space-y-3';
+    rightColumn.className = 'flex flex-col space-y-3';
+    modeText.textContent = 'Full HD固定';
+    toggleBtn.querySelector('i').className = 'fas fa-mobile-alt';
+  }
+  
+  // グラフを再描画
+  setTimeout(() => {
+    if (dailyChart) dailyChart.resize();
+    if (hourlyChart) hourlyChart.resize();
+  }, 100);
+}
+
 /**
  * 初期化
  */
@@ -33,6 +78,9 @@ async function init() {
   document.getElementById('hourly-date').addEventListener('change', (e) => {
     loadHourlyStats(e.target.value);
   });
+  
+  // 表示モード切替ボタン
+  document.getElementById('toggle-mode').addEventListener('click', toggleDisplayMode);
   
   // Server-Sent Events (SSE) でリアルタイム更新
   connectSSE();
@@ -90,21 +138,23 @@ async function loadCurrentStatus() {
       const peopleCount = count !== undefined ? count : 0;
       
       document.getElementById('current-status').innerHTML = `
-        <div class="flex items-center space-x-4">
-          <div class="w-4 h-4 rounded-full animate-pulse" style="background-color: ${color};"></div>
+        <div class="flex items-center space-x-3">
+          <div class="w-3 h-3 rounded-full animate-pulse" style="background-color: ${color};"></div>
           <div>
             <div class="flex items-baseline space-x-2">
-              <span class="text-4xl font-bold text-blue-600">${peopleCount}</span>
-              <span class="text-xl text-gray-500">人</span>
-              <span class="text-2xl font-semibold" style="color: ${color};">（${status}）</span>
+              <span class="text-3xl font-bold text-blue-600">${peopleCount}</span>
+              <span class="text-lg text-gray-500">人</span>
+              <span class="text-xl font-semibold" style="color: ${color};">（${status}）</span>
             </div>
-            <p class="text-sm text-gray-500 mt-1">更新: ${formatted_time || '-'}</p>
+            <p class="text-xs text-gray-500 mt-1">更新: ${formatted_time || '-'}</p>
           </div>
         </div>
       `;
       
       if (formatted_time) {
-        document.getElementById('last-update').textContent = formatted_time;
+        // 時:分のみ抽出（例: "2024-10-27 13:00:00" -> "13:00"）
+        const timeOnly = formatted_time.split(' ')[1]?.substring(0, 5) || formatted_time;
+        document.getElementById('last-update').textContent = timeOnly;
       }
     }
   } catch (error) {
@@ -193,25 +243,35 @@ function renderDailyChart(data) {
         x: {
           title: {
             display: true,
-            text: '日付'
-          }
+            text: '日付',
+            font: { size: 11 }
+          },
+          ticks: { font: { size: 10 } }
         },
         y: {
           beginAtZero: true,
           title: {
             display: true,
-            text: '人数'
-          }
+            text: '人数',
+            font: { size: 11 }
+          },
+          ticks: { font: { size: 10 } }
         }
       },
       plugins: {
         legend: {
-          position: 'top'
+          position: 'top',
+          labels: { font: { size: 11 }, padding: 8 }
         },
         tooltip: {
           mode: 'index',
-          intersect: false
+          intersect: false,
+          bodyFont: { size: 11 },
+          titleFont: { size: 12 }
         }
+      },
+      layout: {
+        padding: { top: 5, bottom: 5, left: 5, right: 5 }
       }
     }
   });
@@ -276,25 +336,35 @@ function renderHourlyChart(dataArray) {
         x: {
           title: {
             display: true,
-            text: '時刻'
-          }
+            text: '時刻',
+            font: { size: 11 }
+          },
+          ticks: { font: { size: 10 } }
         },
         y: {
           beginAtZero: true,
           title: {
             display: true,
-            text: '人数'
-          }
+            text: '人数',
+            font: { size: 11 }
+          },
+          ticks: { font: { size: 10 } }
         }
       },
       plugins: {
         legend: {
-          position: 'top'
+          position: 'top',
+          labels: { font: { size: 11 }, padding: 8 }
         },
         tooltip: {
           mode: 'index',
-          intersect: false
+          intersect: false,
+          bodyFont: { size: 11 },
+          titleFont: { size: 12 }
         }
+      },
+      layout: {
+        padding: { top: 5, bottom: 5, left: 5, right: 5 }
       }
     }
   });
@@ -305,7 +375,7 @@ function renderHourlyChart(dataArray) {
  */
 async function loadStatusHistory() {
   try {
-    const response = await fetch(`${API_BASE}/status/history?limit=50`);
+    const response = await fetch(`${API_BASE}/status/history?limit=30`);
     const result = await response.json();
     
     if (result.success) {
@@ -333,14 +403,14 @@ function renderStatusHistory(history) {
     const peopleCount = item.count !== undefined ? item.count : 0;
     
     return `
-      <div class="flex items-center justify-between p-3 rounded-lg ${isFirst ? 'bg-blue-50 border-l-4 border-blue-500' : 'bg-gray-50'}">
-        <div class="flex items-center space-x-3">
-          <div class="w-3 h-3 rounded-full" style="background-color: ${color};"></div>
-          <span class="text-2xl font-bold text-blue-600">${peopleCount}人</span>
-          <span class="font-semibold text-lg" style="color: ${color};">（${item.status}）</span>
-          ${isFirst ? '<span class="text-xs bg-blue-500 text-white px-2 py-1 rounded">最新</span>' : ''}
+      <div class="flex items-center justify-between p-2 rounded-lg ${isFirst ? 'bg-blue-50 border-l-4 border-blue-500' : 'bg-gray-50'}">
+        <div class="flex items-center space-x-2">
+          <div class="w-2 h-2 rounded-full" style="background-color: ${color};"></div>
+          <span class="text-xl font-bold text-blue-600">${peopleCount}人</span>
+          <span class="font-semibold text-base" style="color: ${color};">（${item.status}）</span>
+          ${isFirst ? '<span class="text-xs bg-blue-500 text-white px-1.5 py-0.5 rounded">最新</span>' : ''}
         </div>
-        <span class="text-sm text-gray-600">${item.formatted_time}</span>
+        <span class="text-xs text-gray-600">${item.formatted_time}</span>
       </div>
     `;
   }).join('');
@@ -364,24 +434,22 @@ async function loadQueueStatus() {
       container.innerHTML = `
         <div class="flex items-center justify-between">
           <div>
-            <p class="text-amber-700 font-bold text-xl">🚶 現在行列発生中</p>
-            <p class="text-gray-600 mt-2">
-              入れ替わり回数: <span class="font-bold text-lg">${turnoverCount}回</span>
-            </p>
-            <p class="text-gray-600">
-              推定待ち人数: <span class="font-bold text-2xl text-amber-600">${estimatedQueue}人</span>
+            <p class="text-amber-700 font-bold text-base">🚶 現在行列発生中</p>
+            <p class="text-gray-600 text-sm mt-1">
+              入れ替わり: <span class="font-bold">${turnoverCount}回</span> / 
+              待ち人数: <span class="font-bold text-lg text-amber-600">${estimatedQueue}人</span>
             </p>
           </div>
-          <div class="bg-amber-200 rounded-full p-4">
-            <i class="fas fa-users text-amber-700 text-3xl"></i>
+          <div class="bg-amber-200 rounded-full p-3">
+            <i class="fas fa-users text-amber-700 text-2xl"></i>
           </div>
         </div>
       `;
     } else {
       container.innerHTML = `
         <div class="flex items-center">
-          <i class="fas fa-check-circle text-green-500 mr-3 text-2xl"></i>
-          <p class="text-gray-700 font-semibold">現在行列は発生していません</p>
+          <i class="fas fa-check-circle text-green-500 mr-2 text-xl"></i>
+          <p class="text-gray-700 text-sm font-semibold">現在行列は発生していません</p>
         </div>
       `;
     }
@@ -395,7 +463,7 @@ async function loadQueueStatus() {
  */
 async function loadQueueHistory() {
   try {
-    const response = await fetch(`${API_BASE}/queue/history?limit=20`);
+    const response = await fetch(`${API_BASE}/queue/history?limit=10`);
     const result = await response.json();
     
     if (result.success) {
@@ -424,27 +492,25 @@ function renderQueueHistory(history) {
     const duration = item.duration_minutes || 0;
     
     return `
-      <div class="p-4 rounded-lg ${isRecent ? 'bg-amber-50 border-l-4 border-amber-500' : 'bg-gray-50'}">
-        <div class="flex items-center justify-between mb-2">
-          <div class="flex items-center space-x-3">
-            <i class="fas fa-users text-amber-600"></i>
-            <span class="font-semibold text-gray-800">行列イベント #${history.length - index}</span>
-            ${isRecent ? '<span class="text-xs bg-amber-500 text-white px-2 py-1 rounded">最近</span>' : ''}
+      <div class="p-2 rounded-lg ${isRecent ? 'bg-amber-50 border-l-4 border-amber-500' : 'bg-gray-50'}">
+        <div class="flex items-center justify-between mb-1">
+          <div class="flex items-center space-x-2">
+            <i class="fas fa-users text-amber-600 text-sm"></i>
+            <span class="font-semibold text-gray-800 text-sm">行列 #${history.length - index}</span>
+            ${isRecent ? '<span class="text-xs bg-amber-500 text-white px-1.5 py-0.5 rounded">最近</span>' : ''}
           </div>
-          <span class="text-sm text-gray-500">${duration}分間</span>
+          <span class="text-xs text-gray-500">${duration}分</span>
         </div>
-        <div class="grid grid-cols-2 gap-4 text-sm">
+        <div class="grid grid-cols-2 gap-2 text-xs">
           <div>
-            <p class="text-gray-600">入れ替わり回数</p>
-            <p class="font-bold text-lg text-blue-600">${turnoverCount}回</p>
+            <p class="text-gray-600">入替: <span class="font-bold text-blue-600">${turnoverCount}回</span></p>
           </div>
           <div>
-            <p class="text-gray-600">推定待ち人数</p>
-            <p class="font-bold text-lg text-amber-600">${estimatedQueue}人</p>
+            <p class="text-gray-600">待: <span class="font-bold text-amber-600">${estimatedQueue}人</span></p>
           </div>
         </div>
-        <div class="mt-2 text-xs text-gray-500">
-          ${item.start_formatted} 〜 ${item.end_formatted}
+        <div class="mt-1 text-xs text-gray-500">
+          ${item.start_formatted}
         </div>
       </div>
     `;

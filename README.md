@@ -45,7 +45,13 @@
 npm install
 ```
 
-2. **サーバーの起動**
+2. **Playwrightブラウザのインストール（初回のみ）**
+
+```bash
+npx playwright install chromium
+```
+
+3. **サーバーの起動**
 
 ```bash
 npm start
@@ -57,7 +63,7 @@ npm start
 npm run dev
 ```
 
-3. **ダッシュボードにアクセス**
+4. **ダッシュボードにアクセス**
 
 ブラウザで以下のURLを開きます：
 

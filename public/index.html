@@ -7,128 +7,167 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+  <style>
+    body {
+      overflow: hidden;
+    }
+    /* レスポンシブモード用 */
+    .responsive-mode {
+      display: flex !important;
+      flex-direction: column !important;
+      overflow-y: auto !important;
+    }
+    .responsive-mode > div {
+      width: 100% !important;
+    }
+    /* スクロールバーのスタイル */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f1f1;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #888;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #555;
+    }
+  </style>
 </head>
-<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
-  <div class="container mx-auto px-4 py-8">
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 h-screen">
+  <div id="app-container" class="h-screen flex flex-col px-4 py-3">
     <!-- ヘッダー -->
-    <header class="mb-8">
-      <h1 class="text-4xl font-bold text-gray-800 mb-2">
-        <i class="fas fa-smoking text-blue-600"></i>
+    <header class="mb-3 flex items-center justify-between">
+      <h1 class="text-2xl font-bold text-gray-800 flex items-center">
+        <i class="fas fa-smoking text-blue-600 mr-2"></i>
         喫煙所混雑状況 統計ダッシュボード
+        <span class="text-sm font-normal text-gray-600 ml-3">郵船ビルディング</span>
       </h1>
-      <p class="text-gray-600">郵船ビルディング - リアルタイム監視システム</p>
+      <div class="flex items-center space-x-2">
+        <button id="toggle-mode" class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2">
+          <i class="fas fa-desktop"></i>
+          <span id="mode-text">レスポンシブ</span>
+        </button>
+      </div>
     </header>
 
-    <!-- 現在のステータス -->
-    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
-      <h2 class="text-2xl font-semibold text-gray-800 mb-4">
-        <i class="fas fa-circle-info text-blue-500"></i>
-        現在のステータス
-      </h2>
-      <div id="current-status" class="flex items-center space-x-4">
-        <div class="animate-pulse">
-          <div class="h-4 bg-gray-200 rounded w-32"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 統計情報 -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-      <!-- 総レコード数 -->
-      <div class="bg-white rounded-lg shadow-lg p-6">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-gray-500 text-sm">総記録数</p>
-            <p id="total-records" class="text-3xl font-bold text-blue-600">-</p>
-          </div>
-          <div class="bg-blue-100 rounded-full p-3">
-            <i class="fas fa-database text-blue-600 text-2xl"></i>
+    <!-- メインコンテンツ: 2カラムレイアウト -->
+    <div id="main-content" class="flex-1 grid grid-cols-2 gap-4 overflow-hidden">
+      <!-- 左カラム -->
+      <div class="flex flex-col space-y-3 overflow-y-auto">
+        <!-- 現在のステータス -->
+        <div class="bg-white rounded-lg shadow-lg p-4 flex-shrink-0">
+          <h2 class="text-lg font-semibold text-gray-800 mb-2 flex items-center">
+            <i class="fas fa-circle-info text-blue-500 mr-2"></i>
+            現在のステータス
+          </h2>
+          <div id="current-status" class="flex items-center space-x-4">
+            <div class="animate-pulse">
+              <div class="h-4 bg-gray-200 rounded w-32"></div>
+            </div>
           </div>
         </div>
-      </div>
 
-      <!-- 最終更新時刻 -->
-      <div class="bg-white rounded-lg shadow-lg p-6">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-gray-500 text-sm">最終更新</p>
-            <p id="last-update" class="text-lg font-semibold text-gray-700">-</p>
+        <!-- 統計情報 -->
+        <div class="grid grid-cols-3 gap-3 flex-shrink-0">
+          <!-- 総レコード数 -->
+          <div class="bg-white rounded-lg shadow-lg p-3">
+            <div class="flex flex-col items-center">
+              <div class="bg-blue-100 rounded-full p-2 mb-2">
+                <i class="fas fa-database text-blue-600 text-xl"></i>
+              </div>
+              <p class="text-gray-500 text-xs">総記録数</p>
+              <p id="total-records" class="text-xl font-bold text-blue-600">-</p>
+            </div>
           </div>
-          <div class="bg-green-100 rounded-full p-3">
-            <i class="fas fa-clock text-green-600 text-2xl"></i>
+
+          <!-- 最終更新時刻 -->
+          <div class="bg-white rounded-lg shadow-lg p-3">
+            <div class="flex flex-col items-center">
+              <div class="bg-green-100 rounded-full p-2 mb-2">
+                <i class="fas fa-clock text-green-600 text-xl"></i>
+              </div>
+              <p class="text-gray-500 text-xs">最終更新</p>
+              <p id="last-update" class="text-xs font-semibold text-gray-700 text-center">-</p>
+            </div>
+          </div>
+
+          <!-- 監視期間 -->
+          <div class="bg-white rounded-lg shadow-lg p-3">
+            <div class="flex flex-col items-center">
+              <div class="bg-purple-100 rounded-full p-2 mb-2">
+                <i class="fas fa-calendar text-purple-600 text-xl"></i>
+              </div>
+              <p class="text-gray-500 text-xs">表示期間</p>
+              <p class="text-xl font-bold text-purple-600">7日</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 日別統計グラフ -->
+        <div class="bg-white rounded-lg shadow-lg p-4 flex-shrink-0" style="height: 320px;">
+          <h2 class="text-lg font-semibold text-gray-800 mb-2 flex items-center">
+            <i class="fas fa-chart-bar text-green-500 mr-2"></i>
+            日別混雑状況
+          </h2>
+          <div style="height: calc(100% - 40px);">
+            <canvas id="daily-chart"></canvas>
+          </div>
+        </div>
+
+        <!-- 時間帯別統計 -->
+        <div class="bg-white rounded-lg shadow-lg p-4 flex-shrink-0" style="height: 320px;">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="text-lg font-semibold text-gray-800 flex items-center">
+              <i class="fas fa-clock text-orange-500 mr-2"></i>
+              時間帯別統計
+            </h2>
+            <input 
+              type="date" 
+              id="hourly-date" 
+              class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+          </div>
+          <div style="height: calc(100% - 40px);">
+            <canvas id="hourly-chart"></canvas>
           </div>
         </div>
       </div>
 
-      <!-- 監視期間 -->
-      <div class="bg-white rounded-lg shadow-lg p-6">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-gray-500 text-sm">表示期間</p>
-            <p class="text-2xl font-bold text-purple-600">7日間</p>
+      <!-- 右カラム -->
+      <div class="flex flex-col space-y-3">
+        <!-- 行列統計 -->
+        <div class="bg-white rounded-lg shadow-lg p-4 flex-shrink-0">
+          <h2 class="text-lg font-semibold text-gray-800 mb-3 flex items-center">
+            <i class="fas fa-users-line text-amber-500 mr-2"></i>
+            行列統計（入れ替わり検知）
+          </h2>
+          
+          <!-- 現在の行列状況 -->
+          <div id="current-queue" class="mb-3 p-3 bg-amber-50 rounded-lg border-l-4 border-amber-500">
+            <p class="text-gray-600 text-sm">現在の行列状況を確認中...</p>
           </div>
-          <div class="bg-purple-100 rounded-full p-3">
-            <i class="fas fa-calendar text-purple-600 text-2xl"></i>
+
+          <!-- 行列履歴 -->
+          <div id="queue-history" class="space-y-2 max-h-48 overflow-y-auto">
+            <!-- 履歴がここに表示されます -->
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- 日別統計グラフ -->
-    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
-      <h2 class="text-2xl font-semibold text-gray-800 mb-4">
-        <i class="fas fa-chart-bar text-green-500"></i>
-        日別混雑状況
-      </h2>
-      <div class="h-80">
-        <canvas id="daily-chart"></canvas>
-      </div>
-    </div>
-
-    <!-- 時間帯別統計 -->
-    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-2xl font-semibold text-gray-800">
-          <i class="fas fa-clock text-orange-500"></i>
-          時間帯別統計
-        </h2>
-        <input 
-          type="date" 
-          id="hourly-date" 
-          class="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-      </div>
-      <div class="h-80">
-        <canvas id="hourly-chart"></canvas>
-      </div>
-    </div>
-
-    <!-- 行列統計 -->
-    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
-      <h2 class="text-2xl font-semibold text-gray-800 mb-4">
-        <i class="fas fa-users-line text-amber-500"></i>
-        行列統計（入れ替わり検知）
-      </h2>
-      
-      <!-- 現在の行列状況 -->
-      <div id="current-queue" class="mb-6 p-4 bg-amber-50 rounded-lg border-l-4 border-amber-500">
-        <p class="text-gray-600">現在の行列状況を確認中...</p>
-      </div>
-
-      <!-- 行列履歴 -->
-      <div id="queue-history" class="space-y-3 max-h-80 overflow-y-auto">
-        <!-- 履歴がここに表示されます -->
-      </div>
-    </div>
-
-    <!-- ステータス変化履歴 -->
-    <div class="bg-white rounded-lg shadow-lg p-6">
-      <h2 class="text-2xl font-semibold text-gray-800 mb-4">
-        <i class="fas fa-history text-red-500"></i>
-        最近のステータス変更履歴
-      </h2>
-      <div id="status-history" class="space-y-2 max-h-96 overflow-y-auto">
-        <!-- 履歴がここに表示されます -->
+        <!-- ステータス変化履歴 -->
+        <div class="bg-white rounded-lg shadow-lg p-4 flex-1 min-h-0 flex flex-col">
+          <h2 class="text-lg font-semibold text-gray-800 mb-3 flex items-center">
+            <i class="fas fa-history text-red-500 mr-2"></i>
+            最近のステータス変更履歴
+          </h2>
+          <div id="status-history" class="space-y-2 overflow-y-auto flex-1">
+            <!-- 履歴がここに表示されます -->
+          </div>
+        </div>
       </div>
     </div>
   </div>
