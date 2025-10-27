@@ -1,0 +1,139 @@
+import Database from 'better-sqlite3';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const dbPath = path.join(__dirname, '..', 'tobacco_stats.db');
+
+// データベース接続
+const db = new Database(dbPath);
+
+// テーブル作成
+db.exec(`
+  CREATE TABLE IF NOT EXISTS status_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    camera_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    count INTEGER DEFAULT 0,
+    timestamp INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_timestamp ON status_records(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_camera_id ON status_records(camera_id);
+`);
+
+// 既存テーブルにcountカラムを追加（存在しない場合）
+try {
+  db.exec('ALTER TABLE status_records ADD COLUMN count INTEGER DEFAULT 0');
+  console.log('✅ countカラムを追加しました');
+} catch (error) {
+  // カラムが既に存在する場合はエラーを無視
+  if (!error.message.includes('duplicate column')) {
+    console.error('⚠️ カラム追加エラー:', error.message);
+  }
+}
+
+/**
+ * ステータスを記録
+ */
+export function recordStatus(cameraId, status, count = 0) {
+  const timestamp = Date.now();
+  const stmt = db.prepare(
+    'INSERT INTO status_records (camera_id, status, count, timestamp) VALUES (?, ?, ?, ?)'
+  );
+  return stmt.run(cameraId, status, count, timestamp);
+}
+
+/**
+ * 日ごとの統計を取得（人数ベース）
+ */
+export function getDailyStats(cameraId, days = 7) {
+  const startTime = Date.now() - (days * 24 * 60 * 60 * 1000);
+  
+  const stmt = db.prepare(`
+    SELECT 
+      date(timestamp / 1000, 'unixepoch', 'localtime') as date,
+      AVG(count) as avg_count,
+      MAX(count) as max_count,
+      MIN(count) as min_count,
+      COUNT(*) as record_count
+    FROM status_records
+    WHERE camera_id = ? AND timestamp >= ?
+    GROUP BY date
+    ORDER BY date DESC
+  `);
+  
+  return stmt.all(cameraId, startTime);
+}
+
+/**
+ * 時間帯別の統計を取得（指定日、人数ベース）
+ */
+export function getHourlyStats(cameraId, date) {
+  const stmt = db.prepare(`
+    SELECT 
+      strftime('%H', timestamp / 1000, 'unixepoch', 'localtime') as hour,
+      AVG(count) as avg_count,
+      MAX(count) as max_count,
+      MIN(count) as min_count,
+      COUNT(*) as record_count
+    FROM status_records
+    WHERE camera_id = ? 
+      AND date(timestamp / 1000, 'unixepoch', 'localtime') = ?
+    GROUP BY hour
+    ORDER BY hour
+  `);
+  
+  return stmt.all(cameraId, date);
+}
+
+/**
+ * 最新のステータスを取得
+ */
+export function getLatestStatus(cameraId) {
+  const stmt = db.prepare(`
+    SELECT status, count, timestamp, datetime(timestamp / 1000, 'unixepoch', 'localtime') as formatted_time
+    FROM status_records
+    WHERE camera_id = ?
+    ORDER BY timestamp DESC
+    LIMIT 1
+  `);
+  
+  return stmt.get(cameraId);
+}
+
+/**
+ * すべてのレコード数を取得
+ */
+export function getRecordCount(cameraId) {
+  const stmt = db.prepare('SELECT COUNT(*) as count FROM status_records WHERE camera_id = ?');
+  return stmt.get(cameraId);
+}
+
+/**
+ * ステータスの変化履歴を取得（同じステータスが連続する場合は1つにまとめる）
+ */
+export function getStatusChanges(cameraId, limit = 100) {
+  const stmt = db.prepare(`
+    WITH status_changes AS (
+      SELECT 
+        status,
+        count,
+        timestamp,
+        datetime(timestamp / 1000, 'unixepoch', 'localtime') as formatted_time,
+        LAG(status) OVER (ORDER BY timestamp) as prev_status
+      FROM status_records
+      WHERE camera_id = ?
+      ORDER BY timestamp DESC
+    )
+    SELECT status, count, timestamp, formatted_time
+    FROM status_changes
+    WHERE prev_status IS NULL OR status != prev_status
+    LIMIT ?
+  `);
+  
+  return stmt.all(cameraId, limit);
+}
+
+export default db;

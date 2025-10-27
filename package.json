@@ -1,0 +1,22 @@
+{
+  "name": "tobacco-stats",
+  "version": "1.0.0",
+  "description": "喫煙所混雑状況の統計記録システム",
+  "main": "server/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "client": "cd client && npm run dev"
+  },
+  "keywords": ["tobacco", "statistics", "websocket"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.1",
+    "cors": "^2.8.5",
+    "ws": "^8.18.0",
+    "better-sqlite3": "^11.5.0",
+    "playwright": "^1.49.0"
+  }
+}
