@@ -1,4 +1,4 @@
-import { recordStatus, startQueueEvent, updateQueueEvent, endQueueEvent, getActiveQueueEvent } from './database.js';
+import { recordStatus, startQueueEvent, updateQueueEvent, endQueueEvent, getActiveQueueEvent, cleanupIncompleteQueueEvents } from './database.js';
 
 const API_URL = 'https://api.mebaru.blue/api/cameras/getLatestDataForGroup?id=77adc011-b0d6-4421-989e-625560ffd53a';
 const CAMERA_ID = 'abd6ab54-0eb9-4f52-a5a0-df6d8fd1ecb2';
@@ -143,6 +143,8 @@ function detectQueue(count) {
   const isFull = count >= CAPACITY; // 6人以上で満員
   const isEmpty = count <= 3; // 3人以下で行列終了
   
+  console.log(`🔍 行列検知: count=${count}, isFull=${isFull}, isEmpty=${isEmpty}, isMonitoring=${queueDetectionState.isMonitoring}, wasFull=${queueDetectionState.wasFull}`);
+  
   // 満員に達した（6人以上）
   if (isFull) {
     if (!queueDetectionState.isMonitoring) {
@@ -152,11 +154,11 @@ function detectQueue(count) {
       queueDetectionState.turnoverCount = 0;
       queueDetectionState.wasFull = true;
       
-      // 行列イベント開始
-      const result = startQueueEvent(CAMERA_ID, 0);
+      // 行列イベント開始（最大人数も記録）
+      const result = startQueueEvent(CAMERA_ID, count, 0);
       queueDetectionState.activeEventId = result.lastInsertRowid;
       
-      console.log(`🚶 行列検知開始 (${count}人で満員)`);
+      console.log(`🚶 行列検知開始 (${count}人で満員) - activeEventId=${queueDetectionState.activeEventId}`);
     } else {
       // 既に監視中
       // 一度6人未満になってから再び6人以上になった = 入れ替わり
@@ -166,16 +168,20 @@ function detectQueue(count) {
         // 入れ替わり回数 = 待ち人数
         const estimatedQueue = queueDetectionState.turnoverCount;
         
-        // 行列イベント更新
+        // 最大人数を更新
+        queueDetectionState.peakCount = Math.max(queueDetectionState.peakCount, count);
+        
+        // 行列イベント更新（最大人数も含む）
         if (queueDetectionState.activeEventId) {
           updateQueueEvent(
             queueDetectionState.activeEventId, 
             queueDetectionState.turnoverCount, 
-            estimatedQueue
+            estimatedQueue,
+            queueDetectionState.peakCount
           );
         }
         
-        console.log(`🔄 入れ替わり検知 #${queueDetectionState.turnoverCount} (${count}人) - 推定待ち: ${estimatedQueue}人`);
+        console.log(`🔄 入れ替わり検知 #${queueDetectionState.turnoverCount} (${count}人) - 推定待ち: ${estimatedQueue}人 - 最大: ${queueDetectionState.peakCount}人`);
       }
       
       queueDetectionState.wasFull = true;
@@ -188,14 +194,17 @@ function detectQueue(count) {
       
       // 3人以下になったら行列終了
       if (isEmpty) {
+        const estimatedQueue = queueDetectionState.turnoverCount;
+        
         if (queueDetectionState.activeEventId) {
           endQueueEvent(queueDetectionState.activeEventId);
-          
-          const estimatedQueue = queueDetectionState.turnoverCount;
           console.log(`✅ 行列終了 - 入れ替わり: ${queueDetectionState.turnoverCount}回, 最大${queueDetectionState.peakCount}人, 推定待ち: ${estimatedQueue}人`);
+        } else {
+          console.log(`✅ 行列終了 - activeEventIdなし`);
         }
         
-        // 監視リセット
+        // 監視リセット（必ず実行）
+        console.log(`🔄 行列検知状態をリセット`);
         queueDetectionState.isMonitoring = false;
         queueDetectionState.peakCount = 0;
         queueDetectionState.turnoverCount = 0;
@@ -212,6 +221,22 @@ function detectQueue(count) {
 export async function startMonitoring() {
   console.log('👀 API監視を開始します...');
   console.log(`🔗 API: ${API_URL}`);
+  
+  // サーバー起動時に未完了の行列イベントをすべてクリーンアップ
+  const cleanedCount = cleanupIncompleteQueueEvents(CAMERA_ID);
+  if (cleanedCount > 0) {
+    console.log(`⚠️ ${cleanedCount}件の未完了行列イベントを検出しました`);
+    console.log(`✅ すべて強制終了しました`);
+  } else {
+    console.log(`✅ 未完了の行列イベントはありません`);
+  }
+  
+  // 状態を初期化
+  queueDetectionState.isMonitoring = false;
+  queueDetectionState.peakCount = 0;
+  queueDetectionState.turnoverCount = 0;
+  queueDetectionState.activeEventId = null;
+  queueDetectionState.wasFull = false;
   console.log(`⏰ ${POLL_INTERVAL / 1000}秒ごとにチェックします\n`);
   
   // 初回取得

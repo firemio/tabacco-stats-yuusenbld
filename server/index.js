@@ -5,12 +5,14 @@ import { fileURLToPath } from 'url';
 import { 
   getDailyStats, 
   getHourlyStats, 
+  getWeeklyHourlyStats,
   getLatestStatus, 
   getRecordCount,
   getStatusChanges,
   getQueueStatsByDay,
   getQueueHistory,
-  getActiveQueueEvent
+  getActiveQueueEvent,
+  getQueueStacks
 } from './database.js';
 // Playwrightスクレイパーの代わりにAPI監視を使用
 import { startMonitoring, setStatusChangeCallback } from './api-scraper.js';
@@ -73,6 +75,24 @@ app.get('/api/stats/hourly', (req, res) => {
     res.json({
       success: true,
       date,
+      data: stats
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * 週間時間別統計を取得（過去7日間の各時刻の平均人数）
+ */
+app.get('/api/stats/weekly-hourly', (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7;
+    const stats = getWeeklyHourlyStats(CAMERA_ID, days);
+    
+    res.json({
+      success: true,
+      days,
       data: stats
     });
   } catch (error) {
@@ -151,12 +171,44 @@ app.get('/api/queue/history', (req, res) => {
  */
 app.get('/api/queue/current', (req, res) => {
   try {
+    // 現在の人数を取得
+    const currentStatus = getLatestStatus(CAMERA_ID);
+    const currentCount = currentStatus?.count || 0;
+    
+    // 3人以下なら強制的に「行列なし」
+    if (currentCount <= 3) {
+      res.json({
+        success: true,
+        data: null,
+        hasQueue: false
+      });
+      return;
+    }
+    
+    // 4人以上の場合のみ行列イベントを確認
     const activeQueue = getActiveQueueEvent(CAMERA_ID);
     
     res.json({
       success: true,
       data: activeQueue || null,
       hasQueue: !!activeQueue
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * 行列スタック取得（日時範囲指定）
+ */
+app.get('/api/queue/stacks', (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7;
+    const stacks = getQueueStacks(CAMERA_ID, days);
+    
+    res.json({
+      success: true,
+      data: stacks
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

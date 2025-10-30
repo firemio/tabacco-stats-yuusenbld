@@ -41,6 +41,7 @@ db.exec(`
     camera_id TEXT NOT NULL,
     start_time INTEGER NOT NULL,
     end_time INTEGER,
+    max_count INTEGER DEFAULT 0,
     turnover_count INTEGER DEFAULT 1,
     estimated_queue INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -49,6 +50,17 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_queue_start ON queue_events(start_time);
   CREATE INDEX IF NOT EXISTS idx_queue_camera ON queue_events(camera_id);
 `);
+
+// 既存テーブルにmax_countカラムを追加（存在しない場合）
+try {
+  db.exec('ALTER TABLE queue_events ADD COLUMN max_count INTEGER DEFAULT 0');
+  console.log('✅ max_countカラムを追加しました');
+} catch (error) {
+  // カラムが既に存在する場合はエラーを無視
+  if (!error.message.includes('duplicate column')) {
+    console.error('⚠️ カラム追加エラー:', error.message);
+  }
+}
 
 /**
  * ステータスを記録
@@ -105,6 +117,31 @@ export function getHourlyStats(cameraId, date) {
 }
 
 /**
+ * 週間時間別統計を取得（過去7日間の各時刻の平均行列人数）
+ * 行列イベントの最大人数を時刻別に集計
+ */
+export function getWeeklyHourlyStats(cameraId, days = 7) {
+  const startTime = Date.now() - (days * 24 * 60 * 60 * 1000);
+  
+  const stmt = db.prepare(`
+    SELECT 
+      strftime('%H', start_time / 1000, 'unixepoch', 'localtime') as hour,
+      AVG(max_count) as avg_count,
+      MAX(max_count) as max_count,
+      COUNT(*) as record_count
+    FROM queue_events
+    WHERE camera_id = ? 
+      AND start_time >= ?
+      AND end_time IS NOT NULL
+      AND max_count > 0
+    GROUP BY hour
+    ORDER BY hour
+  `);
+  
+  return stmt.all(cameraId, startTime);
+}
+
+/**
  * 最新のステータスを取得
  */
 export function getLatestStatus(cameraId) {
@@ -155,22 +192,22 @@ export function getStatusChanges(cameraId, limit = 100) {
 /**
  * 行列イベントを開始
  */
-export function startQueueEvent(cameraId, estimatedQueue = 0) {
+export function startQueueEvent(cameraId, maxCount = 0, estimatedQueue = 0) {
   const timestamp = Date.now();
   const stmt = db.prepare(
-    'INSERT INTO queue_events (camera_id, start_time, estimated_queue, turnover_count) VALUES (?, ?, ?, 1)'
+    'INSERT INTO queue_events (camera_id, start_time, max_count, estimated_queue, turnover_count) VALUES (?, ?, ?, ?, 1)'
   );
-  return stmt.run(cameraId, timestamp, estimatedQueue);
+  return stmt.run(cameraId, timestamp, maxCount, estimatedQueue);
 }
 
 /**
- * 行列イベントを更新（入れ替わり回数を増やす）
+ * 行列イベントを更新（入れ替わり回数と最大人数を増やす）
  */
-export function updateQueueEvent(eventId, turnoverCount, estimatedQueue) {
+export function updateQueueEvent(eventId, turnoverCount, estimatedQueue, maxCount) {
   const stmt = db.prepare(
-    'UPDATE queue_events SET turnover_count = ?, estimated_queue = ? WHERE id = ?'
+    'UPDATE queue_events SET turnover_count = ?, estimated_queue = ?, max_count = ? WHERE id = ?'
   );
-  return stmt.run(turnoverCount, estimatedQueue, eventId);
+  return stmt.run(turnoverCount, estimatedQueue, maxCount, eventId);
 }
 
 /**
@@ -191,7 +228,20 @@ export function getActiveQueueEvent(cameraId) {
   const stmt = db.prepare(
     'SELECT * FROM queue_events WHERE camera_id = ? AND end_time IS NULL ORDER BY start_time DESC LIMIT 1'
   );
+  
   return stmt.get(cameraId);
+}
+
+/**
+ * すべての未完了行列イベントを強制終了
+ */
+export function cleanupIncompleteQueueEvents(cameraId) {
+  const timestamp = Date.now();
+  const stmt = db.prepare(
+    'UPDATE queue_events SET end_time = ? WHERE camera_id = ? AND end_time IS NULL'
+  );
+  const result = stmt.run(timestamp, cameraId);
+  return result.changes;
 }
 
 /**
@@ -225,6 +275,7 @@ export function getQueueHistory(cameraId, limit = 50) {
     SELECT 
       start_time,
       end_time,
+      max_count,
       turnover_count,
       estimated_queue,
       datetime(start_time / 1000, 'unixepoch', 'localtime') as start_formatted,
@@ -237,6 +288,37 @@ export function getQueueHistory(cameraId, limit = 50) {
   `);
   
   return stmt.all(cameraId, limit);
+}
+
+/**
+ * 行列スタックを取得（日時範囲指定）
+ * 横軸：日付、縦軸：時刻で表示するためのデータ
+ */
+export function getQueueStacks(cameraId, days = 7) {
+  const startTime = Date.now() - (days * 24 * 60 * 60 * 1000);
+  
+  const stmt = db.prepare(`
+    SELECT 
+      id,
+      start_time,
+      end_time,
+      max_count,
+      turnover_count,
+      estimated_queue,
+      date(start_time / 1000, 'unixepoch', 'localtime') as date,
+      strftime('%H', start_time / 1000, 'unixepoch', 'localtime') as start_hour,
+      strftime('%M', start_time / 1000, 'unixepoch', 'localtime') as start_minute,
+      strftime('%H', end_time / 1000, 'unixepoch', 'localtime') as end_hour,
+      strftime('%M', end_time / 1000, 'unixepoch', 'localtime') as end_minute,
+      datetime(start_time / 1000, 'unixepoch', 'localtime') as start_formatted,
+      datetime(end_time / 1000, 'unixepoch', 'localtime') as end_formatted,
+      CAST((end_time - start_time) / 60000 AS INTEGER) as duration_minutes
+    FROM queue_events
+    WHERE camera_id = ? AND start_time >= ? AND end_time IS NOT NULL
+    ORDER BY start_time DESC
+  `);
+  
+  return stmt.all(cameraId, startTime);
 }
 
 export default db;

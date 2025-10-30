@@ -1,7 +1,6 @@
 const API_BASE = '/api';
 
 // グラフのインスタンス
-let dailyChart = null;
 let hourlyChart = null;
 
 // ステータスの色定義
@@ -30,12 +29,13 @@ function toggleDisplayMode() {
   const rightColumn = mainContent.children[1];
   
   if (isFullHDMode) {
-    // Full HD固定表示モード
+    // Full HD固定表示モード (1:2の比率)
     body.style.overflow = 'hidden';
     appContainer.style.overflow = 'hidden';
     appContainer.style.height = '100vh';
-    mainContent.className = 'flex-1 grid grid-cols-2 gap-4 overflow-hidden';
-    leftColumn.className = 'flex flex-col space-y-3 overflow-y-auto';
+    mainContent.className = 'flex-1 grid gap-4 overflow-hidden';
+    mainContent.style.gridTemplateColumns = '1fr 2fr';
+    leftColumn.className = 'flex flex-col space-y-3';
     rightColumn.className = 'flex flex-col space-y-3';
     modeText.textContent = 'レスポンシブ';
     toggleBtn.querySelector('i').className = 'fas fa-desktop';
@@ -45,6 +45,7 @@ function toggleDisplayMode() {
     appContainer.style.overflow = 'visible';
     appContainer.style.height = 'auto';
     mainContent.className = 'flex flex-col gap-4 pb-4';
+    mainContent.style.gridTemplateColumns = '';
     leftColumn.className = 'flex flex-col space-y-3';
     rightColumn.className = 'flex flex-col space-y-3';
     modeText.textContent = 'Full HD固定';
@@ -53,7 +54,6 @@ function toggleDisplayMode() {
   
   // グラフを再描画
   setTimeout(() => {
-    if (dailyChart) dailyChart.resize();
     if (hourlyChart) hourlyChart.resize();
   }, 100);
 }
@@ -64,20 +64,13 @@ function toggleDisplayMode() {
 async function init() {
   await loadCurrentStatus();
   await loadRecordCount();
-  await loadDailyStats();
+  await loadQueueStacks();
   await loadQueueStatus();
   await loadQueueHistory();
   await loadStatusHistory();
   
-  // 日付選択の初期値を今日に設定
-  const today = new Date().toISOString().split('T')[0];
-  document.getElementById('hourly-date').value = today;
-  await loadHourlyStats(today);
-  
-  // 日付変更イベント
-  document.getElementById('hourly-date').addEventListener('change', (e) => {
-    loadHourlyStats(e.target.value);
-  });
+  // 週間時間別統計を読み込む
+  await loadWeeklyHourlyStats();
   
   // 表示モード切替ボタン
   document.getElementById('toggle-mode').addEventListener('click', toggleDisplayMode);
@@ -98,16 +91,11 @@ function connectSSE() {
     // ステータスが変更されたら全データを再読み込み
     await loadCurrentStatus();
     await loadRecordCount();
-    await loadDailyStats();
+    await loadQueueStacks();
     await loadQueueStatus();
     await loadQueueHistory();
     await loadStatusHistory();
-    
-    const today = new Date().toISOString().split('T')[0];
-    const selectedDate = document.getElementById('hourly-date').value;
-    if (selectedDate === today) {
-      await loadHourlyStats(selectedDate);
-    }
+    await loadWeeklyHourlyStats();
   };
   
   eventSource.onerror = (error) => {
@@ -183,101 +171,6 @@ async function loadRecordCount() {
 }
 
 /**
- * 日別統計を取得・表示
- */
-async function loadDailyStats() {
-  try {
-    const response = await fetch(`${API_BASE}/stats/daily?days=7`);
-    const result = await response.json();
-    
-    if (result.success) {
-      renderDailyChart(result.data);
-    }
-  } catch (error) {
-    console.error('日別統計取得エラー:', error);
-  }
-}
-
-/**
- * 日別グラフを描画（人数ベース）
- */
-function renderDailyChart(data) {
-  const ctx = document.getElementById('daily-chart').getContext('2d');
-  
-  // データを整形（人数ベース）
-  const dates = data.map(d => d.date);
-  
-  const datasets = [{
-    label: '平均人数',
-    data: data.map(d => d.avg_count || 0),
-    backgroundColor: '#3b82f6',
-    borderColor: '#2563eb',
-    borderWidth: 2,
-    type: 'line',
-    fill: false
-  }, {
-    label: '最大人数',
-    data: data.map(d => d.max_count || 0),
-    backgroundColor: '#ef4444',
-    borderColor: '#dc2626',
-    borderWidth: 1,
-    type: 'bar'
-  }];
-  
-  // 既存のグラフを破棄
-  if (dailyChart) {
-    dailyChart.destroy();
-  }
-  
-  // 新しいグラフを作成
-  dailyChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: dates,
-      datasets: datasets
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        x: {
-          title: {
-            display: true,
-            text: '日付',
-            font: { size: 11 }
-          },
-          ticks: { font: { size: 10 } }
-        },
-        y: {
-          beginAtZero: true,
-          title: {
-            display: true,
-            text: '人数',
-            font: { size: 11 }
-          },
-          ticks: { font: { size: 10 } }
-        }
-      },
-      plugins: {
-        legend: {
-          position: 'top',
-          labels: { font: { size: 11 }, padding: 8 }
-        },
-        tooltip: {
-          mode: 'index',
-          intersect: false,
-          bodyFont: { size: 11 },
-          titleFont: { size: 12 }
-        }
-      },
-      layout: {
-        padding: { top: 5, bottom: 5, left: 5, right: 5 }
-      }
-    }
-  });
-}
-
-/**
  * 時間帯別統計を取得・表示
  */
 async function loadHourlyStats(date) {
@@ -290,6 +183,22 @@ async function loadHourlyStats(date) {
     }
   } catch (error) {
     console.error('時間帯別統計取得エラー:', error);
+  }
+}
+
+/**
+ * 週間時間別統計を取得・表示（過去7日間の各時刻の平均）
+ */
+async function loadWeeklyHourlyStats() {
+  try {
+    const response = await fetch(`${API_BASE}/stats/weekly-hourly?days=7`);
+    const result = await response.json();
+    
+    if (result.success) {
+      renderHourlyChart(result.data);
+    }
+  } catch (error) {
+    console.error('週間時間別統計取得エラー:', error);
   }
 }
 
@@ -309,10 +218,10 @@ function renderHourlyChart(dataArray) {
   });
   
   const datasets = [{
-    label: '平均人数',
+    label: '平均行列人数',
     data: hours.map(hour => dataMap[hour]?.avg_count || 0),
-    backgroundColor: '#3b82f6',
-    borderColor: '#2563eb',
+    backgroundColor: '#ef4444',
+    borderColor: '#dc2626',
     borderWidth: 2,
     fill: false
   }];
@@ -345,7 +254,7 @@ function renderHourlyChart(dataArray) {
           beginAtZero: true,
           title: {
             display: true,
-            text: '人数',
+            text: '行列人数',
             font: { size: 11 }
           },
           ticks: { font: { size: 10 } }
@@ -401,16 +310,15 @@ function renderStatusHistory(history) {
     const color = statusColors[item.status] || statusColors['不明'];
     const isFirst = index === 0;
     const peopleCount = item.count !== undefined ? item.count : 0;
+    const timeOnly = item.formatted_time.split(' ')[1]?.substring(0, 5) || item.formatted_time;
     
     return `
-      <div class="flex items-center justify-between p-2 rounded-lg ${isFirst ? 'bg-blue-50 border-l-4 border-blue-500' : 'bg-gray-50'}">
-        <div class="flex items-center space-x-2">
-          <div class="w-2 h-2 rounded-full" style="background-color: ${color};"></div>
-          <span class="text-xl font-bold text-blue-600">${peopleCount}人</span>
-          <span class="font-semibold text-base" style="color: ${color};">（${item.status}）</span>
-          ${isFirst ? '<span class="text-xs bg-blue-500 text-white px-1.5 py-0.5 rounded">最新</span>' : ''}
-        </div>
-        <span class="text-xs text-gray-600">${item.formatted_time}</span>
+      <div class="px-1.5 py-0.5 rounded text-xs ${isFirst ? 'bg-blue-50 border-l-2 border-blue-500' : 'bg-gray-50'}">
+        <span class="inline-block w-6">
+          <div class="w-1.5 h-1.5 rounded-full inline-block" style="background-color: ${color};"></div>
+        </span>
+        <span class="inline-block w-12 font-bold text-blue-600">${peopleCount}</span>
+        <span class="text-gray-400">${timeOnly}</span>
       </div>
     `;
   }).join('');
@@ -434,22 +342,22 @@ async function loadQueueStatus() {
       container.innerHTML = `
         <div class="flex items-center justify-between">
           <div>
-            <p class="text-amber-700 font-bold text-base">🚶 現在行列発生中</p>
-            <p class="text-gray-600 text-sm mt-1">
-              入れ替わり: <span class="font-bold">${turnoverCount}回</span> / 
-              待ち人数: <span class="font-bold text-lg text-amber-600">${estimatedQueue}人</span>
+            <p class="text-amber-700 font-bold text-xs">🚶 行列発生中</p>
+            <p class="text-gray-600 text-xs">
+              入替<span class="font-bold">${turnoverCount}</span> / 
+              待ち<span class="font-bold text-amber-600">${estimatedQueue}</span>人
             </p>
           </div>
-          <div class="bg-amber-200 rounded-full p-3">
-            <i class="fas fa-users text-amber-700 text-2xl"></i>
+          <div class="bg-amber-200 rounded-full p-2">
+            <i class="fas fa-users text-amber-700 text-base"></i>
           </div>
         </div>
       `;
     } else {
       container.innerHTML = `
         <div class="flex items-center">
-          <i class="fas fa-check-circle text-green-500 mr-2 text-xl"></i>
-          <p class="text-gray-700 text-sm font-semibold">現在行列は発生していません</p>
+          <i class="fas fa-check-circle text-green-500 mr-1.5 text-sm"></i>
+          <p class="text-gray-700 text-xs font-semibold">現在行列は発生していません</p>
         </div>
       `;
     }
@@ -486,35 +394,139 @@ function renderQueueHistory(history) {
   }
   
   container.innerHTML = history.map((item, index) => {
-    const isRecent = index < 3;
+    const isRecent = index === 0;
     const estimatedQueue = item.estimated_queue || 0;
     const turnoverCount = item.turnover_count || 0;
+    const maxCount = item.max_count || 0;
     const duration = item.duration_minutes || 0;
     
     return `
-      <div class="p-2 rounded-lg ${isRecent ? 'bg-amber-50 border-l-4 border-amber-500' : 'bg-gray-50'}">
-        <div class="flex items-center justify-between mb-1">
-          <div class="flex items-center space-x-2">
-            <i class="fas fa-users text-amber-600 text-sm"></i>
-            <span class="font-semibold text-gray-800 text-sm">行列 #${history.length - index}</span>
-            ${isRecent ? '<span class="text-xs bg-amber-500 text-white px-1.5 py-0.5 rounded">最近</span>' : ''}
-          </div>
-          <span class="text-xs text-gray-500">${duration}分</span>
-        </div>
-        <div class="grid grid-cols-2 gap-2 text-xs">
-          <div>
-            <p class="text-gray-600">入替: <span class="font-bold text-blue-600">${turnoverCount}回</span></p>
-          </div>
-          <div>
-            <p class="text-gray-600">待: <span class="font-bold text-amber-600">${estimatedQueue}人</span></p>
-          </div>
-        </div>
-        <div class="mt-1 text-xs text-gray-500">
-          ${item.start_formatted}
-        </div>
+      <div class="px-1.5 py-0.5 rounded text-xs ${isRecent ? 'bg-amber-50 border-l-2 border-amber-500' : 'bg-gray-50'}">
+        <span class="inline-block w-8 text-gray-600">#${history.length - index}</span>
+        <span class="inline-block w-10 text-red-600 font-bold">${maxCount}</span>
+        <span class="inline-block w-10 text-blue-600 font-bold">${turnoverCount}</span>
+        <span class="inline-block w-10 text-amber-600 font-bold">${estimatedQueue}</span>
+        <span class="text-gray-400">${duration}m</span>
       </div>
     `;
   }).join('');
+}
+
+/**
+ * 行列スタックを取得・表示
+ */
+async function loadQueueStacks() {
+  try {
+    const response = await fetch(`${API_BASE}/queue/stacks?days=7`);
+    const result = await response.json();
+    
+    if (result.success) {
+      renderQueueHeatmap(result.data);
+    }
+  } catch (error) {
+    console.error('行列スタック取得エラー:', error);
+  }
+}
+
+/**
+ * 行列スタックをヒートマップとして描画
+ * 横軸: 日付、縦軸: 時刻（0-23時）
+ */
+function renderQueueHeatmap(stacks) {
+  const container = document.getElementById('queue-heatmap');
+  
+  if (!stacks || stacks.length === 0) {
+    container.innerHTML = '<p class="text-gray-500 text-center py-4">行列データがありません</p>';
+    return;
+  }
+  
+  // 日付一覧を取得（ユニークでソート済み）
+  const dates = [...new Set(stacks.map(s => s.date))].sort();
+  
+  // 時刻は0-23時
+  const hours = Array.from({ length: 24 }, (_, i) => i);
+  
+  // 日付×時刻のマップを作成
+  const heatmapData = {};
+  dates.forEach(date => {
+    heatmapData[date] = {};
+    hours.forEach(hour => {
+      heatmapData[date][hour] = [];
+    });
+  });
+  
+  // スタックデータをマッピング（開始時刻の時のみに配置）
+  stacks.forEach(stack => {
+    const startHour = parseInt(stack.start_hour);
+    
+    // 開始時刻の時にのみデータを追加
+    if (heatmapData[stack.date] && heatmapData[stack.date][startHour] !== undefined) {
+      heatmapData[stack.date][startHour].push(stack);
+    }
+  });
+  
+  // ヒートマップを描画
+  let html = '<div class="inline-block">';
+  html += '<table class="border-collapse border border-gray-300 text-xs">';
+  
+  // ヘッダー（日付）
+  html += '<thead><tr class="bg-gray-100">';
+  html += '<th class="border border-gray-300 px-2 py-1 sticky left-0 bg-gray-100 z-10">時刻</th>';
+  dates.forEach(date => {
+    html += `<th class="border border-gray-300 px-3 py-1">${date}</th>`;
+  });
+  html += '</tr></thead>';
+  
+  // ボディ（時刻×日付）
+  html += '<tbody>';
+  hours.forEach(hour => {
+    html += '<tr>';
+    html += `<td class="border border-gray-300 px-2 py-1 text-center font-semibold sticky left-0 bg-white z-10">${String(hour).padStart(2, '0')}:00</td>`;
+    
+    dates.forEach(date => {
+      const stacksInCell = heatmapData[date][hour];
+      const cellContent = renderHeatmapCell(stacksInCell, hour);
+      html += `<td class="border border-gray-300 px-1 py-1" style="min-width: 80px;">${cellContent}</td>`;
+    });
+    
+    html += '</tr>';
+  });
+  html += '</tbody>';
+  html += '</table>';
+  html += '</div>';
+  
+  container.innerHTML = html;
+}
+
+/**
+ * ヒートマップセルの内容を描画
+ */
+function renderHeatmapCell(stacksInCell, hour) {
+  if (!stacksInCell || stacksInCell.length === 0) {
+    return '<div class="h-6"></div>';
+  }
+  
+  // この時刻に複数の行列がある場合、すべての最大人数を表示
+  // 最大人数でソート（降順）
+  const sortedStacks = stacksInCell.sort((a, b) => (b.max_count || 0) - (a.max_count || 0));
+  
+  // 最も大きい人数で背景色を決定
+  const maxCount = sortedStacks[0].max_count || 0;
+  const intensity = Math.min(maxCount / 8, 1); // 8人以上で最大強度
+  const bgColor = `rgba(239, 68, 68, ${0.2 + intensity * 0.6})`; // 赤系
+  
+  // 複数の行列がある場合は縦に並べる
+  const countItems = sortedStacks.map(stack => 
+    `<span class="font-bold text-gray-800 text-xs">${stack.max_count || 0}</span>`
+  ).join(' ');
+  
+  return `
+    <div class="min-h-6 flex items-center justify-center rounded p-1" style="background-color: ${bgColor};">
+      <div class="flex flex-wrap gap-1 items-center justify-center">
+        ${countItems}
+      </div>
+    </div>
+  `;
 }
 
 // ページ読み込み時に初期化
