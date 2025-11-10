@@ -136,12 +136,12 @@ function getStatusFromCount(count) {
 
 /**
  * 行列を検知・記録
- * 6人以上で満員、3人以下で行列終了
+ * 6人以上で満員、2人以下で行列終了
  * 入れ替わり回数の累積 = 待ち人数
  */
 function detectQueue(count) {
   const isFull = count >= CAPACITY; // 6人以上で満員
-  const isEmpty = count <= 3; // 3人以下で行列終了
+  const isEmpty = count <= 2; // 2人以下で行列終了
   
   console.log(`🔍 行列検知: count=${count}, isFull=${isFull}, isEmpty=${isEmpty}, isMonitoring=${queueDetectionState.isMonitoring}, wasFull=${queueDetectionState.wasFull}`);
   
@@ -192,7 +192,7 @@ function detectQueue(count) {
     if (queueDetectionState.isMonitoring) {
       queueDetectionState.wasFull = false;
       
-      // 3人以下になったら行列終了
+      // 2人以下になったら行列終了
       if (isEmpty) {
         const estimatedQueue = queueDetectionState.turnoverCount;
         
@@ -226,7 +226,7 @@ export async function startMonitoring() {
   const cleanedCount = cleanupIncompleteQueueEvents(CAMERA_ID);
   if (cleanedCount > 0) {
     console.log(`⚠️ ${cleanedCount}件の未完了行列イベントを検出しました`);
-    console.log(`✅ すべて強制終了しました`);
+    console.log(`✅ すべて削除しました（データの整合性を保つため）`);
   } else {
     console.log(`✅ 未完了の行列イベントはありません`);
   }

@@ -233,14 +233,14 @@ export function getActiveQueueEvent(cameraId) {
 }
 
 /**
- * すべての未完了行列イベントを強制終了
+ * すべての未完了行列イベントを削除
+ * （サーバー再起動などで正しく終了できなかったイベントは信頼できないため削除）
  */
 export function cleanupIncompleteQueueEvents(cameraId) {
-  const timestamp = Date.now();
   const stmt = db.prepare(
-    'UPDATE queue_events SET end_time = ? WHERE camera_id = ? AND end_time IS NULL'
+    'DELETE FROM queue_events WHERE camera_id = ? AND end_time IS NULL'
   );
-  const result = stmt.run(timestamp, cameraId);
+  const result = stmt.run(cameraId);
   return result.changes;
 }
 

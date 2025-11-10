@@ -204,38 +204,58 @@ async function loadWeeklyHourlyStats() {
 
 /**
  * 時間帯別グラフを描画（人数ベース）
+ * 行列が存在する時刻のみ表示（0埋めなし）
  */
 function renderHourlyChart(dataArray) {
   const ctx = document.getElementById('hourly-chart').getContext('2d');
-  
-  // 0～23時のラベルを作成
-  const hours = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
-  
-  // データをマップに変換
-  const dataMap = {};
-  dataArray.forEach(d => {
-    dataMap[d.hour] = d;
-  });
-  
-  const datasets = [{
-    label: '平均行列人数',
-    data: hours.map(hour => dataMap[hour]?.avg_count || 0),
-    backgroundColor: '#ef4444',
-    borderColor: '#dc2626',
-    borderWidth: 2,
-    fill: false
-  }];
   
   // 既存のグラフを破棄
   if (hourlyChart) {
     hourlyChart.destroy();
   }
   
+  // データが存在しない場合
+  if (!dataArray || dataArray.length === 0) {
+    hourlyChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: []
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          title: {
+            display: true,
+            text: '行列データがありません',
+            font: { size: 14 },
+            color: '#9ca3af'
+          }
+        }
+      }
+    });
+    return;
+  }
+  
+  // データが存在する時刻のみ抽出
+  const labels = dataArray.map(d => `${d.hour}:00`);
+  const avgCounts = dataArray.map(d => d.avg_count);
+  
+  const datasets = [{
+    label: '平均行列人数',
+    data: avgCounts,
+    backgroundColor: '#ef4444',
+    borderColor: '#dc2626',
+    borderWidth: 2,
+    fill: false
+  }];
+  
   // 新しいグラフを作成
   hourlyChart = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: hours.map(h => `${h}:00`),
+      labels: labels,
       datasets: datasets
     },
     options: {
