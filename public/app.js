@@ -479,8 +479,8 @@ function renderQueueHeatmap(stacks) {
   // 日付一覧を取得（ユニークでソート済み）
   const dates = [...new Set(stacks.map(s => s.date))].sort();
   
-  // 時刻は0-23時
-  const hours = Array.from({ length: 24 }, (_, i) => i);
+  // 時刻は7-23時（営業時間帯）
+  const hours = Array.from({ length: 17 }, (_, i) => i + 7);
   
   // 日付×時刻のマップを作成
   const heatmapData = {};
