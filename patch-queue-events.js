@@ -73,11 +73,13 @@ console.log(`ステータスレコード数: ${statuses.length}件\n`);
 console.log('【ステップ4】行列検知ロジックを実行\n');
 
 let queueState = {
-  isMonitoring: false,  // 行列監視中か
-  startTime: null,      // 行列開始時刻
-  peakCount: 0,         // 最高人数
-  turnoverCount: 0,     // 入れ替わり回数
-  wasFull: false        // 直前が満員だったか
+  isMonitoring: false,     // 行列監視中か
+  startTime: null,         // 行列開始時刻
+  peakCount: 0,            // 最高人数
+  turnoverCount: 0,        // 入れ替わり回数
+  totalWaitingPeople: 0,   // 累積待ち人数
+  minCountDuringGap: 999,  // 空き時の最小人数
+  wasFull: false           // 直前が満員だったか
 };
 
 let generatedCount = 0;
@@ -107,11 +109,20 @@ statuses.forEach((record, index) => {
       queueState.startTime = record.timestamp;
       queueState.peakCount = count;
       queueState.turnoverCount = 0;
+      queueState.totalWaitingPeople = 0;
+      queueState.minCountDuringGap = 999;
       queueState.wasFull = true;
     } else {
       // 既に監視中：一度6人未満になってから再び6人以上 = 入れ替わり
       if (!queueState.wasFull && isFull) {
         queueState.turnoverCount++;
+        
+        // 待ち人数 = 増えた人数 = 現在 - 空き時の最小人数
+        const waitingPeople = count - queueState.minCountDuringGap;
+        queueState.totalWaitingPeople += waitingPeople;
+        
+        // 次の入れ替わりのために最小人数をリセット
+        queueState.minCountDuringGap = 999;
       }
       queueState.wasFull = true;
       queueState.peakCount = Math.max(queueState.peakCount, count);
@@ -121,9 +132,12 @@ statuses.forEach((record, index) => {
     if (queueState.isMonitoring) {
       queueState.wasFull = false;
       
+      // 空き時の最小人数を記録
+      queueState.minCountDuringGap = Math.min(queueState.minCountDuringGap, count);
+      
       // 2人以下になったら行列終了
       if (isEmpty) {
-        const estimatedQueue = queueState.turnoverCount;
+        const estimatedQueue = queueState.totalWaitingPeople;
         
         // 行列イベントを記録
         insertStmt.run(
@@ -142,6 +156,8 @@ statuses.forEach((record, index) => {
         queueState.startTime = null;
         queueState.peakCount = 0;
         queueState.turnoverCount = 0;
+        queueState.totalWaitingPeople = 0;
+        queueState.minCountDuringGap = 999;
         queueState.wasFull = false;
       }
     }

@@ -117,23 +117,83 @@ export function getHourlyStats(cameraId, date) {
 }
 
 /**
- * 週間時間別統計を取得（過去7日間の各時刻の平均行列人数）
- * 行列イベントの最大人数を時刻別に集計
+ * 週間時間別統計を取得（過去7日間の各時刻の平均行列人数・継続時間）
+ * 行列イベントが存在していた各時刻に記録を展開して集計（滞在時間ベース）
+ * ※日付をまたぐことはない前提
  */
 export function getWeeklyHourlyStats(cameraId, days = 7) {
   const startTime = Date.now() - (days * 24 * 60 * 60 * 1000);
   
   const stmt = db.prepare(`
+    WITH RECURSIVE queue_hours AS (
+      -- 各行列イベントの開始時刻（最初の時刻）
     SELECT 
-      strftime('%H', start_time / 1000, 'unixepoch', 'localtime') as hour,
-      AVG(max_count) as avg_count,
-      MAX(max_count) as max_count,
-      COUNT(*) as record_count
+        id,
+        start_time,
+        end_time,
+        max_count,
+        turnover_count,
+        CAST(strftime('%H', start_time / 1000, 'unixepoch', 'localtime') AS INTEGER) as start_hour,
+        CAST(strftime('%H', end_time / 1000, 'unixepoch', 'localtime') AS INTEGER) as end_hour,
+        CAST(strftime('%H', start_time / 1000, 'unixepoch', 'localtime') AS INTEGER) as hour,
+        CAST(strftime('%M', start_time / 1000, 'unixepoch', 'localtime') AS INTEGER) as start_minute,
+        CAST(strftime('%M', end_time / 1000, 'unixepoch', 'localtime') AS INTEGER) as end_minute
     FROM queue_events
     WHERE camera_id = ? 
       AND start_time >= ?
       AND end_time IS NOT NULL
       AND max_count > 0
+      
+      UNION ALL
+      
+      -- 次の時刻まで1時間ずつ進める
+      SELECT 
+        qh.id,
+        qh.start_time,
+        qh.end_time,
+        qh.max_count,
+        qh.turnover_count,
+        qh.start_hour,
+        qh.end_hour,
+        qh.hour + 1 as hour,
+        qh.start_minute,
+        qh.end_minute
+      FROM queue_hours qh
+      WHERE qh.hour < qh.end_hour
+    ),
+    queue_hour_durations AS (
+      SELECT 
+        hour,
+        id,
+        max_count,
+        turnover_count,
+        -- その時刻における滞在時間（分）
+        CASE 
+          WHEN hour = start_hour AND hour = end_hour THEN 
+            -- 同じ時刻内で開始・終了（例：12:30～12:45 = 15分）
+            end_minute - start_minute
+          WHEN hour = start_hour THEN 
+            -- 開始時刻（例：12:30開始なら12:30～13:00 = 30分）
+            60 - start_minute
+          WHEN hour = end_hour THEN 
+            -- 終了時刻（例：13:45終了なら13:00～13:45 = 45分）
+            end_minute
+          ELSE 
+            -- 中間の時刻（丸々1時間 = 60分）
+            60
+        END as duration_minutes
+      FROM queue_hours
+    )
+    SELECT 
+      printf('%02d', hour) as hour,
+      AVG(max_count) as avg_count,
+      MAX(max_count) as max_count,
+      COUNT(DISTINCT id) as record_count,
+      SUM(duration_minutes) as total_minutes,
+      AVG(duration_minutes) as avg_duration,
+      AVG(turnover_count) as avg_turnover,
+      AVG(CAST((SELECT estimated_queue FROM queue_events WHERE id = queue_hour_durations.id) AS REAL)) as avg_estimated_queue
+    FROM queue_hour_durations
     GROUP BY hour
     ORDER BY hour
   `);
@@ -293,11 +353,14 @@ export function getQueueHistory(cameraId, limit = 50) {
 /**
  * 行列スタックを取得（日時範囲指定）
  * 横軸：日付、縦軸：時刻で表示するためのデータ
+ * 行列が継続している各時刻にデータを展開（滞在時間ベース）
  */
 export function getQueueStacks(cameraId, days = 7) {
   const startTime = Date.now() - (days * 24 * 60 * 60 * 1000);
   
   const stmt = db.prepare(`
+    WITH RECURSIVE queue_hours AS (
+      -- 各行列イベントの開始時刻
     SELECT 
       id,
       start_time,
@@ -306,16 +369,51 @@ export function getQueueStacks(cameraId, days = 7) {
       turnover_count,
       estimated_queue,
       date(start_time / 1000, 'unixepoch', 'localtime') as date,
-      strftime('%H', start_time / 1000, 'unixepoch', 'localtime') as start_hour,
-      strftime('%M', start_time / 1000, 'unixepoch', 'localtime') as start_minute,
-      strftime('%H', end_time / 1000, 'unixepoch', 'localtime') as end_hour,
-      strftime('%M', end_time / 1000, 'unixepoch', 'localtime') as end_minute,
+        CAST(strftime('%H', start_time / 1000, 'unixepoch', 'localtime') AS INTEGER) as start_hour,
+        CAST(strftime('%H', end_time / 1000, 'unixepoch', 'localtime') AS INTEGER) as end_hour,
+        CAST(strftime('%H', start_time / 1000, 'unixepoch', 'localtime') AS INTEGER) as hour,
       datetime(start_time / 1000, 'unixepoch', 'localtime') as start_formatted,
       datetime(end_time / 1000, 'unixepoch', 'localtime') as end_formatted,
       CAST((end_time - start_time) / 60000 AS INTEGER) as duration_minutes
     FROM queue_events
-    WHERE camera_id = ? AND start_time >= ? AND end_time IS NOT NULL
-    ORDER BY start_time DESC
+      WHERE camera_id = ? 
+        AND start_time >= ?
+        AND end_time IS NOT NULL
+      
+      UNION ALL
+      
+      -- 次の時刻まで1時間ずつ進める
+      SELECT 
+        qh.id,
+        qh.start_time,
+        qh.end_time,
+        qh.max_count,
+        qh.turnover_count,
+        qh.estimated_queue,
+        qh.date,
+        qh.start_hour,
+        qh.end_hour,
+        qh.hour + 1 as hour,
+        qh.start_formatted,
+        qh.end_formatted,
+        qh.duration_minutes
+      FROM queue_hours qh
+      WHERE qh.hour < qh.end_hour
+    )
+    SELECT 
+      id,
+      date,
+      printf('%02d', hour) as start_hour,
+      printf('%02d', start_hour) as original_start_hour,
+      printf('%02d', end_hour) as original_end_hour,
+      max_count,
+      turnover_count,
+      estimated_queue,
+      start_formatted,
+      end_formatted,
+      duration_minutes
+    FROM queue_hours
+    ORDER BY start_time DESC, hour
   `);
   
   return stmt.all(cameraId, startTime);

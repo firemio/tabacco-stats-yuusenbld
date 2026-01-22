@@ -240,15 +240,16 @@ function renderHourlyChart(dataArray) {
   
   // データが存在する時刻のみ抽出
   const labels = dataArray.map(d => `${d.hour}:00`);
-  const avgCounts = dataArray.map(d => d.avg_count);
+  const totalMinutes = dataArray.map(d => d.total_minutes || 0);
   
   const datasets = [{
-    label: '平均行列人数',
-    data: avgCounts,
+    label: '行列の長さ（合計分）',
+    data: totalMinutes,
     backgroundColor: '#ef4444',
     borderColor: '#dc2626',
     borderWidth: 2,
-    fill: false
+    fill: false,
+    yAxisID: 'y'
   }];
   
   // 新しいグラフを作成
@@ -274,7 +275,7 @@ function renderHourlyChart(dataArray) {
           beginAtZero: true,
           title: {
             display: true,
-            text: '行列人数',
+            text: '行列時間（分）',
             font: { size: 11 }
           },
           ticks: { font: { size: 10 } }
@@ -289,7 +290,22 @@ function renderHourlyChart(dataArray) {
           mode: 'index',
           intersect: false,
           bodyFont: { size: 11 },
-          titleFont: { size: 12 }
+          titleFont: { size: 12 },
+          callbacks: {
+            afterBody: function(context) {
+              if (context && context.length > 0) {
+                const dataIndex = context[0].dataIndex;
+                const data = dataArray[dataIndex];
+                return [
+                  `平均継続: ${Math.floor(data.avg_duration)}分`,
+                  `イベント数: ${data.record_count}件`,
+                  `平均入替: ${data.avg_turnover.toFixed(1)}回`,
+                  `平均待ち: ${Math.floor(data.avg_estimated_queue || 0)}人`
+                ];
+              }
+              return [];
+            }
+          }
         }
       },
       layout: {
@@ -356,15 +372,15 @@ async function loadQueueStatus() {
     
     if (result.success && result.hasQueue && result.data) {
       const queue = result.data;
-      const estimatedQueue = queue.estimated_queue || 0;
       const turnoverCount = queue.turnover_count || 0;
+      const estimatedQueue = queue.estimated_queue || 0;
       
       container.innerHTML = `
         <div class="flex items-center justify-between">
           <div>
             <p class="text-amber-700 font-bold text-xs">🚶 行列発生中</p>
             <p class="text-gray-600 text-xs">
-              入替<span class="font-bold">${turnoverCount}</span> / 
+              入替<span class="font-bold">${turnoverCount}</span>回 / 
               待ち<span class="font-bold text-amber-600">${estimatedQueue}</span>人
             </p>
           </div>
@@ -415,17 +431,17 @@ function renderQueueHistory(history) {
   
   container.innerHTML = history.map((item, index) => {
     const isRecent = index === 0;
-    const estimatedQueue = item.estimated_queue || 0;
     const turnoverCount = item.turnover_count || 0;
+    const estimatedQueue = item.estimated_queue || 0;
     const maxCount = item.max_count || 0;
     const duration = item.duration_minutes || 0;
     
     return `
       <div class="px-1.5 py-0.5 rounded text-xs ${isRecent ? 'bg-amber-50 border-l-2 border-amber-500' : 'bg-gray-50'}">
         <span class="inline-block w-8 text-gray-600">#${history.length - index}</span>
-        <span class="inline-block w-10 text-red-600 font-bold">${maxCount}</span>
-        <span class="inline-block w-10 text-blue-600 font-bold">${turnoverCount}</span>
-        <span class="inline-block w-10 text-amber-600 font-bold">${estimatedQueue}</span>
+        <span class="inline-block w-12 text-red-600 font-bold">${maxCount}人</span>
+        <span class="inline-block w-12 text-blue-600 font-bold">${turnoverCount}回</span>
+        <span class="inline-block w-12 text-amber-600 font-bold">${estimatedQueue}人</span>
         <span class="text-gray-400">${duration}m</span>
       </div>
     `;
@@ -475,29 +491,51 @@ function renderQueueHeatmap(stacks) {
     });
   });
   
-  // スタックデータをマッピング（開始時刻の時のみに配置）
+  // スタックデータをマッピング（行列が存在していた各時刻に配置）
   stacks.forEach(stack => {
-    const startHour = parseInt(stack.start_hour);
+    const hour = parseInt(stack.start_hour); // start_hourは「その時刻」を表す
     
-    // 開始時刻の時にのみデータを追加
-    if (heatmapData[stack.date] && heatmapData[stack.date][startHour] !== undefined) {
-      heatmapData[stack.date][startHour].push(stack);
+    // 行列が存在していた時刻にデータを追加
+    if (heatmapData[stack.date] && heatmapData[stack.date][hour] !== undefined) {
+      heatmapData[stack.date][hour].push(stack);
     }
+  });
+  
+  // 時間帯ごとの平均を計算するための集計
+  const hourlyTotals = {};
+  hours.forEach(hour => {
+    hourlyTotals[hour] = { totals: [], sum: 0, count: 0 };
+  });
+  
+  // 各日の各時間帯の合計を計算
+  dates.forEach(date => {
+    hours.forEach(hour => {
+      const stacksInCell = heatmapData[date][hour];
+      // 開始時刻のセルのみ集計（継続セルは除外）
+      const startingStacks = stacksInCell.filter(s => hour === parseInt(s.original_start_hour));
+      if (startingStacks.length > 0) {
+        const cellTotal = startingStacks.reduce((sum, s) => sum + (s.turnover_count || 0), 0);
+        hourlyTotals[hour].totals.push(cellTotal);
+        hourlyTotals[hour].sum += cellTotal;
+        hourlyTotals[hour].count++;
+      }
+    });
   });
   
   // ヒートマップを描画
   let html = '<div class="inline-block">';
   html += '<table class="border-collapse border border-gray-300 text-xs">';
   
-  // ヘッダー（日付）
+  // ヘッダー（日付 + 平均列）
   html += '<thead><tr class="bg-gray-100">';
   html += '<th class="border border-gray-300 px-2 py-1 sticky left-0 bg-gray-100 z-10">時刻</th>';
   dates.forEach(date => {
     html += `<th class="border border-gray-300 px-3 py-1">${date}</th>`;
   });
+  html += '<th class="border border-gray-300 px-3 py-1 bg-blue-50">平均</th>';
   html += '</tr></thead>';
   
-  // ボディ（時刻×日付）
+  // ボディ（時刻×日付 + 平均列）
   html += '<tbody>';
   hours.forEach(hour => {
     html += '<tr>';
@@ -508,6 +546,17 @@ function renderQueueHeatmap(stacks) {
       const cellContent = renderHeatmapCell(stacksInCell, hour);
       html += `<td class="border border-gray-300 px-1 py-1" style="min-width: 80px;">${cellContent}</td>`;
     });
+    
+    // 平均列
+    const hourData = hourlyTotals[hour];
+    if (hourData.count > 0) {
+      const avg = Math.round(hourData.sum / hourData.count);
+      const intensity = Math.min(avg / 50, 1);
+      const bgColor = `rgba(59, 130, 246, ${0.2 + intensity * 0.5})`; // 青系
+      html += `<td class="border border-gray-300 px-2 py-1 text-center font-bold" style="background-color: ${bgColor};">${avg}</td>`;
+    } else {
+      html += '<td class="border border-gray-300 px-2 py-1"></td>';
+    }
     
     html += '</tr>';
   });
@@ -520,31 +569,68 @@ function renderQueueHeatmap(stacks) {
 
 /**
  * ヒートマップセルの内容を描画
+ * 行列が継続している場合は視覚的に表現
  */
 function renderHeatmapCell(stacksInCell, hour) {
   if (!stacksInCell || stacksInCell.length === 0) {
     return '<div class="h-6"></div>';
   }
   
-  // この時刻に複数の行列がある場合、すべての最大人数を表示
-  // 最大人数でソート（降順）
-  const sortedStacks = stacksInCell.sort((a, b) => (b.max_count || 0) - (a.max_count || 0));
+  // IDでグループ化（同じ行列イベントをまとめる）
+  const groupedById = {};
+  stacksInCell.forEach(stack => {
+    if (!groupedById[stack.id]) {
+      groupedById[stack.id] = [];
+    }
+    groupedById[stack.id].push(stack);
+  });
   
-  // 最も大きい人数で背景色を決定
-  const maxCount = sortedStacks[0].max_count || 0;
-  const intensity = Math.min(maxCount / 8, 1); // 8人以上で最大強度
+  // 入れ替え回数でソート（降順）- 混雑度の指標として
+  const sortedStacks = Object.values(groupedById)
+    .map(group => group[0]) // 各グループの代表
+    .sort((a, b) => (b.turnover_count || 0) - (a.turnover_count || 0));
+  
+  // 最も多い入れ替え回数で背景色を決定（混雑度の指標）
+  const maxTurnover = sortedStacks[0].turnover_count || 0;
+  const intensity = Math.min(maxTurnover / 50, 1); // 50回以上で最大強度
   const bgColor = `rgba(239, 68, 68, ${0.2 + intensity * 0.6})`; // 赤系
   
-  // 複数の行列がある場合は縦に並べる
-  const countItems = sortedStacks.map(stack => 
-    `<span class="font-bold text-gray-800 text-xs">${stack.max_count || 0}</span>`
-  ).join(' ');
+  // 開始セルのみ入れ替え回数を収集
+  const startingStacks = sortedStacks.filter(stack => hour === parseInt(stack.original_start_hour));
+  const turnovers = startingStacks.map(stack => stack.turnover_count || 0);
+  const total = turnovers.reduce((a, b) => a + b, 0);
+  
+  // 各行列について、開始/継続/終了を判定して表示
+  const countItems = sortedStacks.map(stack => {
+    const originalStartHour = parseInt(stack.original_start_hour); // 行列の開始時刻
+    const originalEndHour = parseInt(stack.original_end_hour); // 行列の終了時刻
+    
+    // 開始時刻：入れ替え回数を表示
+    if (hour === originalStartHour) {
+      const turnoverCount = stack.turnover_count || 0;
+      return `<span class="font-bold text-gray-800 text-xs">${turnoverCount}</span>`;
+    }
+    // 終了時刻：継続マーク（終了）
+    else if (hour === originalEndHour) {
+      return `<span class="text-gray-400 text-xs">↑</span>`;
+    }
+    // 中間時刻：継続マーク
+    else {
+      return `<span class="text-gray-400 text-xs">│</span>`;
+    }
+  }).join(' ');
+  
+  // 開始セルがある場合のみ合計を表示
+  const summaryLine = startingStacks.length > 0 
+    ? `<div class="text-xs text-blue-600 font-bold mt-0.5">計${total}</div>`
+    : '';
   
   return `
-    <div class="min-h-6 flex items-center justify-center rounded p-1" style="background-color: ${bgColor};">
+    <div class="min-h-6 flex flex-col items-center justify-center rounded p-1" style="background-color: ${bgColor};">
       <div class="flex flex-wrap gap-1 items-center justify-center">
         ${countItems}
       </div>
+      ${summaryLine}
     </div>
   `;
 }
