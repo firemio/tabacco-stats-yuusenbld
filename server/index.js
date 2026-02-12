@@ -12,7 +12,10 @@ import {
   getQueueStatsByDay,
   getQueueHistory,
   getActiveQueueEvent,
-  getQueueStacks
+  getQueueStacks,
+  getCurrentHourAverage,
+  getCurrentHourQueueAverage,
+  getRecentStatusHistory
 } from './database.js';
 // Playwrightスクレイパーの代わりにAPI監視を使用
 import { startMonitoring, setStatusChangeCallback } from './api-scraper.js';
@@ -209,6 +212,97 @@ app.get('/api/queue/stacks', (req, res) => {
     res.json({
       success: true,
       data: stacks
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * 現在時刻の混雑状況・予測情報を取得
+ */
+app.get('/api/dashboard/current', (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7;
+    
+    const currentStatus = getLatestStatus(CAMERA_ID);
+    const currentCount = currentStatus?.count || 0;
+    
+    const hourAvg = getCurrentHourAverage(CAMERA_ID, days);
+    const queueAvg = getCurrentHourQueueAverage(CAMERA_ID, days);
+    const recentHistory = getRecentStatusHistory(CAMERA_ID, 10);
+    
+    const avgCount = hourAvg?.avg_count || 0;
+    const maxCount = hourAvg?.max_count || 0;
+    const minCount = hourAvg?.min_count || 0;
+    
+    const avgQueue = queueAvg?.avg_queue || 0;
+    const avgDuration = Math.round(queueAvg?.avg_duration_minutes || 0);
+    
+    let percentage = 0;
+    if (avgCount > 0) {
+      percentage = Math.min(Math.round((currentCount / avgCount) * 100), 200);
+    }
+    
+    let trend = 'stable';
+    let trendIcon = '→';
+    if (recentHistory.length >= 2) {
+      const latest = recentHistory[0].count;
+      const prev = recentHistory[1].count;
+      if (latest > prev + 1) {
+        trend = 'rising';
+        trendIcon = '↑';
+      } else if (latest < prev - 1) {
+        trend = 'falling';
+        trendIcon = '↓';
+      }
+    }
+    
+    const activeQueue = getActiveQueueEvent(CAMERA_ID);
+    const processedPeople = activeQueue?.processed_people || 0;
+    const remainingPeople = activeQueue?.remaining_people || 0;
+    
+    let estimatedMinutes = 0;
+    if (remainingPeople > 0) {
+      if (avgDuration > 0 && avgQueue > 0) {
+        const minutesPerPerson = avgDuration / avgQueue;
+        estimatedMinutes = Math.round(remainingPeople * minutesPerPerson);
+      } else {
+        estimatedMinutes = Math.round(remainingPeople * 2);
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        current: {
+          count: currentCount,
+          status: currentStatus?.status || '不明',
+          timestamp: currentStatus?.timestamp || null,
+          formatted_time: currentStatus?.formatted_time || null
+        },
+        queue: {
+          processed: processedPeople,
+          remaining: remainingPeople,
+          total: processedPeople + remainingPeople
+        },
+        average: {
+          count: Math.round(avgCount),
+          max_count: Math.round(maxCount),
+          min_count: Math.round(minCount),
+          queue: Math.round(avgQueue),
+          duration_minutes: avgDuration
+        },
+        comparison: {
+          percentage,
+          trend,
+          trend_icon: trendIcon
+        },
+        prediction: {
+          estimated_minutes: estimatedMinutes,
+          has_queue: remainingPeople > 0
+        }
+      }
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

@@ -12,13 +12,13 @@ let intervalId = null;
 
 // 行列検知用
 let queueDetectionState = {
-  isMonitoring: false,     // 大変混雑を監視中か
-  peakCount: 0,            // 最高人数
-  turnoverCount: 0,        // 入れ替わり回数
-  totalWaitingPeople: 0,   // 累積待ち人数
-  minCountDuringGap: 999,  // 空き時の最小人数
-  activeEventId: null,     // 現在の行列イベントID
-  wasFull: false           // 直前が満員だったか
+  isMonitoring: false,         // 大変混雑を監視中か
+  peakCount: 0,             // 最高人数
+  lastCount: 0,              // 前回の人数
+  totalWaitingPeople: 0,      // 累積待ち人数（減った人数の合計）
+  processedPeople: 0,         // 処理済み人数（増えた人数の合計）
+  activeEventId: null,        // 現在の行列イベントID
+  wasFull: false             // 直前が満員だったか
 };
 
 /**
@@ -139,88 +139,111 @@ function getStatusFromCount(count) {
 /**
  * 行列を検知・記録
  * 6人以上で満員、2人以下で行列終了
- * 入れ替わり回数の累積 = 待ち人数
+ * 人数変化で処理済み・待ち人数を追跡
  */
 function detectQueue(count) {
-  const isFull = count >= CAPACITY; // 6人以上で満員
-  const isEmpty = count <= 2; // 2人以下で行列終了
+  const isFull = count >= CAPACITY;
+  const isEmpty = count <= 2;
   
-  console.log(`🔍 行列検知: count=${count}, isFull=${isFull}, isEmpty=${isEmpty}, isMonitoring=${queueDetectionState.isMonitoring}, wasFull=${queueDetectionState.wasFull}`);
+  console.log(`🔍 行列検知: count=${count}, isFull=${isFull}, isEmpty=${isEmpty}, isMonitoring=${queueDetectionState.isMonitoring}, lastCount=${queueDetectionState.lastCount}`);
   
-  // 満員に達した（6人以上）
   if (isFull) {
     if (!queueDetectionState.isMonitoring) {
-      // 監視開始
       queueDetectionState.isMonitoring = true;
       queueDetectionState.peakCount = count;
-      queueDetectionState.turnoverCount = 0;
       queueDetectionState.totalWaitingPeople = 0;
-      queueDetectionState.minCountDuringGap = 999;
+      queueDetectionState.processedPeople = 0;
+      queueDetectionState.lastCount = count;
       queueDetectionState.wasFull = true;
       
-      // 行列イベント開始（最大人数も記録）
-      const result = startQueueEvent(CAMERA_ID, count, 0);
+      const result = startQueueEvent(CAMERA_ID, count, count);
       queueDetectionState.activeEventId = result.lastInsertRowid;
       
       console.log(`🚶 行列検知開始 (${count}人で満員) - activeEventId=${queueDetectionState.activeEventId}`);
     } else {
-      // 既に監視中
-      // 一度6人未満になってから再び6人以上になった = 入れ替わり
-      if (!queueDetectionState.wasFull && isFull) {
-        queueDetectionState.turnoverCount++;
+      queueDetectionState.wasFull = true;
+      queueDetectionState.peakCount = Math.max(queueDetectionState.peakCount, count);
+      
+      if (count !== queueDetectionState.lastCount) {
+        const diff = count - queueDetectionState.lastCount;
         
-        // 待ち人数 = 増えた人数 = 現在 - 空き時の最小人数
-        const waitingPeople = count - queueDetectionState.minCountDuringGap;
-        queueDetectionState.totalWaitingPeople += waitingPeople;
+        if (diff > 0) {
+          queueDetectionState.processedPeople += diff;
+          console.log(`📈 人数増加 ${queueDetectionState.lastCount}→${count} (+${diff}) - 処理済み: ${queueDetectionState.processedPeople}人`);
+        } else if (diff < 0) {
+          queueDetectionState.totalWaitingPeople += Math.abs(diff);
+          console.log(`📉 人数減少 ${queueDetectionState.lastCount}→${count} (${diff}) - 累積待ち: ${queueDetectionState.totalWaitingPeople}人`);
+        }
         
-        // 最大人数を更新
-        queueDetectionState.peakCount = Math.max(queueDetectionState.peakCount, count);
+        queueDetectionState.lastCount = count;
         
-        // 行列イベント更新（最大人数も含む）
+        const remainingPeople = queueDetectionState.totalWaitingPeople - queueDetectionState.processedPeople;
+        
         if (queueDetectionState.activeEventId) {
           updateQueueEvent(
             queueDetectionState.activeEventId, 
-            queueDetectionState.turnoverCount, 
-            queueDetectionState.totalWaitingPeople,
-            queueDetectionState.peakCount
+            0, 
+            remainingPeople,
+            queueDetectionState.peakCount,
+            queueDetectionState.processedPeople,
+            remainingPeople
           );
         }
-        
-        console.log(`🔄 入れ替わり検知 #${queueDetectionState.turnoverCount} (${count}人) - 今回の待ち: ${waitingPeople}人 (${queueDetectionState.minCountDuringGap}人→${count}人), 累積待ち: ${queueDetectionState.totalWaitingPeople}人 - 最大: ${queueDetectionState.peakCount}人`);
-        
-        // 次の入れ替わりのために最小人数をリセット
-        queueDetectionState.minCountDuringGap = 999;
       }
-      
-      queueDetectionState.wasFull = true;
-      queueDetectionState.peakCount = Math.max(queueDetectionState.peakCount, count);
     }
   } else {
-    // 6人未満
     if (queueDetectionState.isMonitoring) {
       queueDetectionState.wasFull = false;
       
-      // 空き時の最小人数を記録
-      queueDetectionState.minCountDuringGap = Math.min(queueDetectionState.minCountDuringGap, count);
-      
-      // 2人以下になったら行列終了
-      if (isEmpty) {
-        const estimatedQueue = queueDetectionState.totalWaitingPeople;
+      if (count !== queueDetectionState.lastCount) {
+        const diff = count - queueDetectionState.lastCount;
         
-        if (queueDetectionState.activeEventId) {
-          endQueueEvent(queueDetectionState.activeEventId);
-          console.log(`✅ 行列終了 - 入れ替わり: ${queueDetectionState.turnoverCount}回, 最大${queueDetectionState.peakCount}人, 推定待ち: ${estimatedQueue}人`);
-        } else {
-          console.log(`✅ 行列終了 - activeEventIdなし`);
+        if (diff > 0) {
+          queueDetectionState.processedPeople += diff;
+          console.log(`📈 人数増加 ${queueDetectionState.lastCount}→${count} (+${diff}) - 処理済み: ${queueDetectionState.processedPeople}人`);
+        } else if (diff < 0) {
+          queueDetectionState.totalWaitingPeople += Math.abs(diff);
+          console.log(`📉 人数減少 ${queueDetectionState.lastCount}→${count} (${diff}) - 累積待ち: ${queueDetectionState.totalWaitingPeople}人`);
         }
         
-        // 監視リセット（必ず実行）
+        queueDetectionState.lastCount = count;
+        
+        const remainingPeople = queueDetectionState.totalWaitingPeople - queueDetectionState.processedPeople;
+        
+        if (queueDetectionState.activeEventId) {
+          updateQueueEvent(
+            queueDetectionState.activeEventId, 
+            0, 
+            remainingPeople,
+            queueDetectionState.peakCount,
+            queueDetectionState.processedPeople,
+            remainingPeople
+          );
+        }
+      }
+      
+      if (isEmpty) {
+        const remainingPeople = queueDetectionState.totalWaitingPeople - queueDetectionState.processedPeople;
+        
+        if (queueDetectionState.activeEventId) {
+          updateQueueEvent(
+            queueDetectionState.activeEventId, 
+            0, 
+            remainingPeople,
+            queueDetectionState.peakCount,
+            queueDetectionState.processedPeople,
+            remainingPeople
+          );
+          endQueueEvent(queueDetectionState.activeEventId);
+          console.log(`✅ 行列終了 - 最大${queueDetectionState.peakCount}人, 処理済み: ${queueDetectionState.processedPeople}人, 残り: ${remainingPeople}人`);
+        }
+        
         console.log(`🔄 行列検知状態をリセット`);
         queueDetectionState.isMonitoring = false;
         queueDetectionState.peakCount = 0;
-        queueDetectionState.turnoverCount = 0;
         queueDetectionState.totalWaitingPeople = 0;
-        queueDetectionState.minCountDuringGap = 999;
+        queueDetectionState.processedPeople = 0;
+        queueDetectionState.lastCount = 0;
         queueDetectionState.activeEventId = null;
         queueDetectionState.wasFull = false;
       }
@@ -247,9 +270,9 @@ export async function startMonitoring() {
   // 状態を初期化
   queueDetectionState.isMonitoring = false;
   queueDetectionState.peakCount = 0;
-  queueDetectionState.turnoverCount = 0;
   queueDetectionState.totalWaitingPeople = 0;
-  queueDetectionState.minCountDuringGap = 999;
+  queueDetectionState.processedPeople = 0;
+  queueDetectionState.lastCount = 0;
   queueDetectionState.activeEventId = null;
   queueDetectionState.wasFull = false;
   console.log(`⏰ ${POLL_INTERVAL / 1000}秒ごとにチェックします\n`);

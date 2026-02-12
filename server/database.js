@@ -44,6 +44,8 @@ db.exec(`
     max_count INTEGER DEFAULT 0,
     turnover_count INTEGER DEFAULT 1,
     estimated_queue INTEGER DEFAULT 0,
+    processed_people INTEGER DEFAULT 0,
+    remaining_people INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -51,12 +53,29 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_queue_camera ON queue_events(camera_id);
 `);
 
-// 既存テーブルにmax_countカラムを追加（存在しない場合）
+// 既存テーブルにカラムを追加（存在しない場合）
 try {
   db.exec('ALTER TABLE queue_events ADD COLUMN max_count INTEGER DEFAULT 0');
   console.log('✅ max_countカラムを追加しました');
 } catch (error) {
-  // カラムが既に存在する場合はエラーを無視
+  if (!error.message.includes('duplicate column')) {
+    console.error('⚠️ カラム追加エラー:', error.message);
+  }
+}
+
+try {
+  db.exec('ALTER TABLE queue_events ADD COLUMN processed_people INTEGER DEFAULT 0');
+  console.log('✅ processed_peopleカラムを追加しました');
+} catch (error) {
+  if (!error.message.includes('duplicate column')) {
+    console.error('⚠️ カラム追加エラー:', error.message);
+  }
+}
+
+try {
+  db.exec('ALTER TABLE queue_events ADD COLUMN remaining_people INTEGER DEFAULT 0');
+  console.log('✅ remaining_peopleカラムを追加しました');
+} catch (error) {
   if (!error.message.includes('duplicate column')) {
     console.error('⚠️ カラム追加エラー:', error.message);
   }
@@ -255,19 +274,19 @@ export function getStatusChanges(cameraId, limit = 100) {
 export function startQueueEvent(cameraId, maxCount = 0, estimatedQueue = 0) {
   const timestamp = Date.now();
   const stmt = db.prepare(
-    'INSERT INTO queue_events (camera_id, start_time, max_count, estimated_queue, turnover_count) VALUES (?, ?, ?, ?, 1)'
+    'INSERT INTO queue_events (camera_id, start_time, max_count, estimated_queue, turnover_count, processed_people, remaining_people) VALUES (?, ?, ?, ?, 1, 0, ?)'
   );
-  return stmt.run(cameraId, timestamp, maxCount, estimatedQueue);
+  return stmt.run(cameraId, timestamp, maxCount, estimatedQueue, estimatedQueue);
 }
 
 /**
  * 行列イベントを更新（入れ替わり回数と最大人数を増やす）
  */
-export function updateQueueEvent(eventId, turnoverCount, estimatedQueue, maxCount) {
+export function updateQueueEvent(eventId, turnoverCount, estimatedQueue, maxCount, processedPeople, remainingPeople) {
   const stmt = db.prepare(
-    'UPDATE queue_events SET turnover_count = ?, estimated_queue = ?, max_count = ? WHERE id = ?'
+    'UPDATE queue_events SET turnover_count = ?, estimated_queue = ?, max_count = ?, processed_people = ?, remaining_people = ? WHERE id = ?'
   );
-  return stmt.run(turnoverCount, estimatedQueue, maxCount, eventId);
+  return stmt.run(turnoverCount, estimatedQueue, maxCount, processedPeople, remainingPeople, eventId);
 }
 
 /**
@@ -351,72 +370,211 @@ export function getQueueHistory(cameraId, limit = 50) {
 }
 
 /**
- * 行列スタックを取得（日時範囲指定）
- * 横軸：日付、縦軸：時刻で表示するためのデータ
- * 行列が継続している各時刻にデータを展開（滞在時間ベース）
+ * 行列スタックを取得（日時範囲指定、10分単位）
+ * 横軸：日付、縦軸：10分刻みの時刻で表示するためのデータ
  */
 export function getQueueStacks(cameraId, days = 7) {
   const startTime = Date.now() - (days * 24 * 60 * 60 * 1000);
   
   const stmt = db.prepare(`
-    WITH RECURSIVE queue_hours AS (
-      -- 各行列イベントの開始時刻
-    SELECT 
-      id,
-      start_time,
-      end_time,
-      max_count,
-      turnover_count,
-      estimated_queue,
-      date(start_time / 1000, 'unixepoch', 'localtime') as date,
-        CAST(strftime('%H', start_time / 1000, 'unixepoch', 'localtime') AS INTEGER) as start_hour,
-        CAST(strftime('%H', end_time / 1000, 'unixepoch', 'localtime') AS INTEGER) as end_hour,
-        CAST(strftime('%H', start_time / 1000, 'unixepoch', 'localtime') AS INTEGER) as hour,
-      datetime(start_time / 1000, 'unixepoch', 'localtime') as start_formatted,
-      datetime(end_time / 1000, 'unixepoch', 'localtime') as end_formatted,
-      CAST((end_time - start_time) / 60000 AS INTEGER) as duration_minutes
-    FROM queue_events
-      WHERE camera_id = ? 
-        AND start_time >= ?
-        AND end_time IS NOT NULL
-      
-      UNION ALL
-      
-      -- 次の時刻まで1時間ずつ進める
+    WITH time_slots AS (
+      SELECT 0 as slot_num, 9 as hour, 0 as min UNION ALL
+      SELECT 1, 9, 10 UNION ALL
+      SELECT 2, 9, 20 UNION ALL
+      SELECT 3, 9, 30 UNION ALL
+      SELECT 4, 9, 40 UNION ALL
+      SELECT 5, 9, 50 UNION ALL
+      SELECT 6, 10, 0 UNION ALL
+      SELECT 7, 10, 10 UNION ALL
+      SELECT 8, 10, 20 UNION ALL
+      SELECT 9, 10, 30 UNION ALL
+      SELECT 10, 10, 40 UNION ALL
+      SELECT 11, 10, 50 UNION ALL
+      SELECT 12, 11, 0 UNION ALL
+      SELECT 13, 11, 10 UNION ALL
+      SELECT 14, 11, 20 UNION ALL
+      SELECT 15, 11, 30 UNION ALL
+      SELECT 16, 11, 40 UNION ALL
+      SELECT 17, 11, 50 UNION ALL
+      SELECT 18, 12, 0 UNION ALL
+      SELECT 19, 12, 10 UNION ALL
+      SELECT 20, 12, 20 UNION ALL
+      SELECT 21, 12, 30 UNION ALL
+      SELECT 22, 12, 40 UNION ALL
+      SELECT 23, 12, 50 UNION ALL
+      SELECT 24, 13, 0 UNION ALL
+      SELECT 25, 13, 10 UNION ALL
+      SELECT 26, 13, 20 UNION ALL
+      SELECT 27, 13, 30 UNION ALL
+      SELECT 28, 13, 40 UNION ALL
+      SELECT 29, 13, 50 UNION ALL
+      SELECT 30, 14, 0 UNION ALL
+      SELECT 31, 14, 10 UNION ALL
+      SELECT 32, 14, 20 UNION ALL
+      SELECT 33, 14, 30 UNION ALL
+      SELECT 34, 14, 40 UNION ALL
+      SELECT 35, 14, 50 UNION ALL
+      SELECT 36, 15, 0 UNION ALL
+      SELECT 37, 15, 10 UNION ALL
+      SELECT 38, 15, 20 UNION ALL
+      SELECT 39, 15, 30 UNION ALL
+      SELECT 40, 15, 40 UNION ALL
+      SELECT 41, 15, 50 UNION ALL
+      SELECT 42, 16, 0 UNION ALL
+      SELECT 43, 16, 10 UNION ALL
+      SELECT 44, 16, 20 UNION ALL
+      SELECT 45, 16, 30 UNION ALL
+      SELECT 46, 16, 40 UNION ALL
+      SELECT 47, 16, 50 UNION ALL
+      SELECT 48, 17, 0 UNION ALL
+      SELECT 49, 17, 10 UNION ALL
+      SELECT 50, 17, 20 UNION ALL
+      SELECT 51, 17, 30 UNION ALL
+      SELECT 52, 17, 40 UNION ALL
+      SELECT 53, 17, 50 UNION ALL
+      SELECT 54, 18, 0 UNION ALL
+      SELECT 55, 18, 10 UNION ALL
+      SELECT 56, 18, 20 UNION ALL
+      SELECT 57, 18, 30 UNION ALL
+      SELECT 58, 18, 40 UNION ALL
+      SELECT 59, 18, 50 UNION ALL
+      SELECT 60, 19, 0 UNION ALL
+      SELECT 61, 19, 10 UNION ALL
+      SELECT 62, 19, 20 UNION ALL
+      SELECT 63, 19, 30 UNION ALL
+      SELECT 64, 19, 40 UNION ALL
+      SELECT 65, 19, 50 UNION ALL
+      SELECT 66, 20, 0 UNION ALL
+      SELECT 67, 20, 10 UNION ALL
+      SELECT 68, 20, 20 UNION ALL
+      SELECT 69, 20, 30 UNION ALL
+      SELECT 70, 20, 40 UNION ALL
+      SELECT 71, 20, 50 UNION ALL
+      SELECT 72, 21, 0 UNION ALL
+      SELECT 73, 21, 10 UNION ALL
+      SELECT 74, 21, 20 UNION ALL
+      SELECT 75, 21, 30 UNION ALL
+      SELECT 76, 21, 40 UNION ALL
+      SELECT 77, 21, 50 UNION ALL
+      SELECT 78, 22, 0 UNION ALL
+      SELECT 79, 22, 10 UNION ALL
+      SELECT 80, 22, 20 UNION ALL
+      SELECT 81, 22, 30 UNION ALL
+      SELECT 82, 22, 40 UNION ALL
+      SELECT 83, 22, 50 UNION ALL
+      SELECT 84, 23, 0 UNION ALL
+      SELECT 85, 23, 10 UNION ALL
+      SELECT 86, 23, 20 UNION ALL
+      SELECT 87, 23, 30 UNION ALL
+      SELECT 88, 23, 40 UNION ALL
+      SELECT 89, 23, 50 UNION ALL
+      SELECT 90, 24, 0 UNION ALL
+      SELECT 91, 24, 10 UNION ALL
+      SELECT 92, 24, 20 UNION ALL
+      SELECT 93, 24, 30 UNION ALL
+      SELECT 94, 24, 40 UNION ALL
+      SELECT 95, 24, 50
+    ),
+    queue_slots AS (
       SELECT 
-        qh.id,
-        qh.start_time,
-        qh.end_time,
-        qh.max_count,
-        qh.turnover_count,
-        qh.estimated_queue,
-        qh.date,
-        qh.start_hour,
-        qh.end_hour,
-        qh.hour + 1 as hour,
-        qh.start_formatted,
-        qh.end_formatted,
-        qh.duration_minutes
-      FROM queue_hours qh
-      WHERE qh.hour < qh.end_hour
+        qe.id,
+        qe.start_time,
+        qe.end_time,
+        qe.max_count,
+        qe.processed_people,
+        qe.remaining_people,
+        qe.estimated_queue,
+        date(qe.start_time / 1000, 'unixepoch', 'localtime') as date,
+        ts.slot_num,
+        ts.hour,
+        ts.min,
+        printf('%02d:%02d', ts.hour, ts.min) as time_slot
+      FROM queue_events qe
+      CROSS JOIN time_slots ts
+      WHERE qe.camera_id = ?
+        AND qe.start_time >= ?
+        AND qe.end_time IS NOT NULL
+        AND (CAST(strftime('%H', qe.start_time / 1000, 'unixepoch', 'localtime') AS INTEGER) * 60 + CAST(strftime('%M', qe.start_time / 1000, 'unixepoch', 'localtime') AS INTEGER)) <= (ts.hour * 60 + ts.min)
+        AND (CAST(strftime('%H', qe.end_time / 1000, 'unixepoch', 'localtime') AS INTEGER) * 60 + CAST(strftime('%M', qe.end_time / 1000, 'unixepoch', 'localtime') AS INTEGER)) > (ts.hour * 60 + ts.min)
     )
     SELECT 
       id,
       date,
-      printf('%02d', hour) as start_hour,
-      printf('%02d', start_hour) as original_start_hour,
-      printf('%02d', end_hour) as original_end_hour,
+      time_slot,
       max_count,
-      turnover_count,
-      estimated_queue,
-      start_formatted,
-      end_formatted,
-      duration_minutes
-    FROM queue_hours
-    ORDER BY start_time DESC, hour
+      processed_people,
+      remaining_people,
+      estimated_queue
+    FROM queue_slots
+    ORDER BY start_time DESC, slot_num
   `);
   
   return stmt.all(cameraId, startTime);
+}
+
+/**
+ * 現在時刻の平均混雑度を取得（過去N日間の同じ時刻）
+ */
+export function getCurrentHourAverage(cameraId, days = 7) {
+  const currentHour = new Date().getHours();
+  const startTime = Date.now() - (days * 24 * 60 * 60 * 1000);
+  
+  const stmt = db.prepare(`
+    SELECT 
+      AVG(count) as avg_count,
+      MAX(count) as max_count,
+      MIN(count) as min_count,
+      COUNT(*) as record_count
+    FROM status_records
+    WHERE camera_id = ? 
+      AND timestamp >= ?
+      AND CAST(strftime('%H', timestamp / 1000, 'unixepoch', 'localtime') AS INTEGER) = ?
+  `);
+  
+  return stmt.get(cameraId, startTime, currentHour);
+}
+
+/**
+ * 現在時刻の行列平均を取得（過去N日間の同じ時刻）
+ */
+export function getCurrentHourQueueAverage(cameraId, days = 7) {
+  const currentHour = new Date().getHours();
+  const startTime = Date.now() - (days * 24 * 60 * 60 * 1000);
+  
+  const stmt = db.prepare(`
+    SELECT 
+      AVG(estimated_queue) as avg_queue,
+      AVG(turnover_count) as avg_turnover,
+      AVG(max_count) as avg_max_count,
+      AVG(CAST((end_time - start_time) / 60000 AS INTEGER)) as avg_duration_minutes,
+      COUNT(*) as record_count
+    FROM queue_events
+    WHERE camera_id = ? 
+      AND start_time >= ?
+      AND end_time IS NOT NULL
+      AND CAST(strftime('%H', start_time / 1000, 'unixepoch', 'localtime') AS INTEGER) = ?
+  `);
+  
+  return stmt.get(cameraId, startTime, currentHour);
+}
+
+/**
+ * 直近のステータス履歴を取得（トレンド判定用）
+ */
+export function getRecentStatusHistory(cameraId, count = 10) {
+  const stmt = db.prepare(`
+    SELECT 
+      status,
+      count,
+      timestamp,
+      datetime(timestamp / 1000, 'unixepoch', 'localtime') as formatted_time
+    FROM status_records
+    WHERE camera_id = ?
+    ORDER BY timestamp DESC
+    LIMIT ?
+  `);
+  
+  return stmt.all(cameraId, count);
 }
 
 export default db;
