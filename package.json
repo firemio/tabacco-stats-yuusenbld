@@ -5,9 +5,9 @@
   "main": "server/index.js",
   "type": "module",
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js",
-    "client": "cd client && npm run dev"
+    "start": "bun server/index.js",
+    "dev": "bun --watch server/index.js",
+    "client": "cd client && bun run dev"
   },
   "keywords": ["tobacco", "statistics", "websocket"],
   "author": "",
@@ -16,7 +16,6 @@
     "express": "^4.21.1",
     "cors": "^2.8.5",
     "ws": "^8.18.0",
-    "better-sqlite3": "^11.5.0",
     "playwright": "^1.49.0"
   }
 }

@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 const db = new Database('tobacco_stats.db');
 
 const rows = db.prepare('SELECT id, start_time, end_time, datetime(start_time/1000, \'unixepoch\', \'localtime\') as local FROM queue_events ORDER BY start_time DESC LIMIT 10').all();
